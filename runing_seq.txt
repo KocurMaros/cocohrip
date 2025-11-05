@@ -1,0 +1,13 @@
+//new 
+source ~/amavet_ws/install/setup.bash && ros2 launch cocohrip_control bringup_all.launch.py
+source ~/amavet_ws/install/setup.bash && ros2 launch robot_control new_launch.py
+//optional
+ros2 run leap_gesture_interface leap_example_node
+// if needed
+sudo tee /sys/module/usbcore/parameters/usbfs_memory_mb >/dev/null <<<0
+cd ~/amavet_ws && source install/setup.bash && ros2 launch checkers_game checkers_game_launch.launch.py
+
+start corner top left
+
+
+ros2 topic echo /move_topic
