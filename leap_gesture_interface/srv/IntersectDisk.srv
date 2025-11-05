@@ -1,0 +1,8 @@
+geometry_msgs/Point line_point1
+geometry_msgs/Point line_point2
+geometry_msgs/Point disk_center
+geometry_msgs/Point disk_normal
+float64 radius
+---
+bool intersects
+geometry_msgs/Point intersection

@@ -1,0 +1,7 @@
+geometry_msgs/Point line_point1
+geometry_msgs/Point line_point2
+geometry_msgs/Point cylinder_axis_start
+geometry_msgs/Point cylinder_axis_end
+float64 radius
+---
+geometry_msgs/Point[] intersections

@@ -1,0 +1,4 @@
+source;share/cocohrip_moveit_control/local_setup.bash
+source;share/cocohrip_moveit_control/local_setup.dsv
+source;share/cocohrip_moveit_control/local_setup.sh
+source;share/cocohrip_moveit_control/local_setup.zsh

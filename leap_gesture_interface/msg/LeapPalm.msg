@@ -1,0 +1,7 @@
+geometry_msgs/Point position
+geometry_msgs/Point stabilized_position
+geometry_msgs/Point velocity
+geometry_msgs/Point normal
+geometry_msgs/Point direction
+geometry_msgs/Quaternion orientation
+float32 width

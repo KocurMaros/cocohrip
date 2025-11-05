@@ -1,0 +1,2 @@
+# Board.msg
+Piece[] pieces

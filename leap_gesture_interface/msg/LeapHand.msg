@@ -1,0 +1,10 @@
+std_msgs/Header header
+int32 hand_id
+bool is_left
+LeapPalm palm
+geometry_msgs/Point arm_position
+LeapFinger[] fingers
+float32 pinch_distance
+float32 grab_angle
+float32 pinch_strength
+float32 grab_strength

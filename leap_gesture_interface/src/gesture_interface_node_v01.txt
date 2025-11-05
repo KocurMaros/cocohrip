@@ -1,0 +1,173 @@
+#include "rclcpp/rclcpp.hpp"
+#include "std_msgs/msg/string.hpp"
+
+extern "C"{
+#include "LeapC.h"
+#include "ExampleConnection.h"
+}
+
+#include "rclcpp/rclcpp.hpp"
+#include "ExampleConnection.h"
+
+// Enumeration for the gestures
+enum class Gesture {
+    FIST,
+    THUMB,
+    POINT,
+    PINKY,
+    PISTOL,
+    VICTORY,
+    HORNS,
+    SHAKA,
+    THREE,
+    ROCKER,
+    FOUR,
+    FIVE,
+    UNKNOWN
+};
+
+class GestureInterfaceNode : public rclcpp::Node
+{
+public:
+    GestureInterfaceNode() : Node("gesture_interface_node")
+    {
+        // Initialize LeapC connection
+        OpenConnection();
+        while (!IsConnected)
+        {
+            rclcpp::sleep_for(std::chrono::milliseconds(100));
+        }
+
+        RCLCPP_INFO(this->get_logger(), "Connected.");
+        LEAP_DEVICE_INFO* deviceProps = GetDeviceProperties();
+        if (deviceProps)
+        {
+            RCLCPP_INFO(this->get_logger(), "Using device %s.", deviceProps->serial);
+        }
+    }
+
+    void run()
+    {
+        rclcpp::Rate rate(10); // e.g., 10Hz rate
+
+        while (rclcpp::ok())
+        {
+            LEAP_TRACKING_EVENT *frame = GetFrame();
+            if (frame)
+            {
+                for (uint32_t h = 0; h < frame->nHands; h++)
+                {
+                    Gesture gesture = recognizeGesture(frame->pHands[h]);
+                    RCLCPP_INFO(this->get_logger(), "Recognized gesture: %s", gestureToString(gesture).c_str());
+                }
+            }
+            rate.sleep();
+        }
+    }
+
+private:
+    Gesture recognizeGesture(const LEAP_HAND &hand)
+    {
+        int extended_fingers = 0;
+        for (int f = 0; f < 5; f++)
+        {
+            if (hand.digits[f].is_extended)
+            {
+                extended_fingers++;
+            }
+        }
+
+        switch (extended_fingers)
+        {
+            case 0: return Gesture::FIST;
+            case 1:
+                // Check if only the thumb is extended
+                if (hand.digits[0].is_extended)  // Assuming 0 is the index for thumb
+                {
+                    return Gesture::THUMB;
+                }
+                //Check for if only the index is extended
+                else if (hand.digits[1].is_extended)  // Assuming 1 is the index for index
+                {
+                    return Gesture::POINT;
+                }
+                else if (hand.digits[4].is_extended)
+                {
+                    return Gesture::PINKY;
+                }
+                else
+                {
+                    return Gesture::UNKNOWN;
+                }
+            case 2: 
+                 if (hand.digits[0].is_extended && hand.digits[1].is_extended)
+                {
+                    return Gesture::PISTOL;
+                }
+                else if (hand.digits[1].is_extended && hand.digits[2].is_extended)
+                {
+                    return Gesture::VICTORY;
+                }
+                else if (hand.digits[1].is_extended && hand.digits[4].is_extended)
+                {
+                    return Gesture::HORNS;
+                }
+                else if (hand.digits[0].is_extended && hand.digits[4].is_extended)
+                {
+                    return Gesture::SHAKA;
+                }
+                else
+                {
+                    return Gesture::UNKNOWN;
+                }
+            case 3:
+                if (hand.digits[1].is_extended && hand.digits[2].is_extended && (hand.digits[0].is_extended || hand.digits[3].is_extended))
+                {
+                    return Gesture::THREE;
+                }
+                else if (hand.digits[0].is_extended && hand.digits[1].is_extended && hand.digits[4].is_extended)
+                {
+                    return Gesture::ROCKER;
+                }
+                else
+                {
+                    return Gesture::UNKNOWN;
+                }
+            case 4: return Gesture::FOUR;
+            case 5: return Gesture::FIVE;
+            default: return Gesture::UNKNOWN;
+        }
+    }
+
+    std::string gestureToString(Gesture gesture)
+    {
+        switch (gesture)
+        {
+            case Gesture::FIST: return "FIST";
+            case Gesture::THUMB: return "THUMB";
+            case Gesture::POINT: return "POINT";
+            case Gesture::PINKY: return "PINKY";
+            case Gesture::PISTOL: return "PISTOL";
+            case Gesture::VICTORY: return "VICTORY";
+            case Gesture::HORNS: return "HORNS";
+            case Gesture::SHAKA: return "SHAKA";
+            case Gesture::THREE: return "THREE";
+            case Gesture::ROCKER: return "ROCKER";
+            case Gesture::FOUR: return "FOUR";
+            case Gesture::FIVE: return "FIVE";
+            default: return "UNKNOWN";
+        }
+    }
+};
+
+int main(int argc, char **argv)
+{
+    rclcpp::init(argc, argv);
+    auto node = std::make_shared<GestureInterfaceNode>();
+    node->run();
+    rclcpp::spin(node);
+    rclcpp::shutdown();
+    CloseConnection();
+    DestroyConnection();
+    return 0;
+}
