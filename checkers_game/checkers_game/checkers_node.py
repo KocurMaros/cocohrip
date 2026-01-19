@@ -93,10 +93,10 @@ class CheckersNode(Node):
         self.last_hand_detected_time = 0
         self.HAND_COOLDOWN = 0.5  # 500ms cooldown after hand leaves
 
-        # Publishers and subscribers
-        self.board_publisher = self.create_publisher(Board, 'board_topic', 10)
-        self.move_publisher = self.create_publisher(Move, 'move_topic', 10)
-        self.hand_detected_publisher = self.create_publisher(HandDetected, 'hand_detected', 10)
+        # Publishers and subscribers - using absolute topic names
+        self.board_publisher = self.create_publisher(Board, '/board_topic', 10)
+        self.move_publisher = self.create_publisher(Move, '/move_topic', 10)
+        self.hand_detected_publisher = self.create_publisher(HandDetected, '/hand_detected', 10)
         self.robot_move_subscription = self.create_subscription(
             RobotMove, '/robot_move_topic', self.robot_move_callback, 10)
 
@@ -111,6 +111,8 @@ class CheckersNode(Node):
         print(f"\n→ Current difficulty: {self.difficulty.name} (depth={self.ai_depth})\n")
         
         # Start background detection thread
+        # NOTE: Detection thread only gets camera images, NOT OpenCV windows
+        # OpenCV windows must be handled in main thread
         self.detection_thread = threading.Thread(target=self._detection_loop, daemon=True)
         self.detection_thread.start()
         
@@ -118,32 +120,26 @@ class CheckersNode(Node):
         self.timer = self.create_timer(1/self.FPS, self.update_pygame)
 
     def _detection_loop(self):
-        """Background thread for continuous board detection"""
+        """Background thread for continuous camera image capture ONLY.
+        NOTE: DO NOT call any cv2.imshow() or boardDetection.get_board() here!
+        OpenCV GUI operations must be in the main thread."""
         while self.detection_thread_running:
             try:
-                # Get camera image
+                # Get camera image ONLY - no OpenCV window operations!
                 camera_image = self.ximeaCamera.get_camera_image()
                 
-                # Run detection if game is initialized
-                if self.game.board.isBoardCreated:
-                    board_detected = self.boardDetection.get_board(camera_image, self.game)
-                    
-                    with self.detection_lock:
-                        self.latest_camera_image = camera_image
-                        self.latest_board_detection = board_detected
-                else:
-                    with self.detection_lock:
-                        self.latest_camera_image = camera_image
+                with self.detection_lock:
+                    self.latest_camera_image = camera_image
                 
                 # Small sleep to prevent CPU overload
-                time.sleep(0.03)  # ~33Hz detection rate
+                time.sleep(0.02)  # ~50Hz capture rate
                 
             except Exception as e:
                 self.get_logger().error(f"Detection thread error: {e}")
                 time.sleep(0.1)
     
     def get_latest_detection(self):
-        """Thread-safe getter for latest detection results"""
+        """Thread-safe getter for latest camera image"""
         with self.detection_lock:
             return self.latest_camera_image, self.latest_board_detection
 
@@ -195,11 +191,20 @@ class CheckersNode(Node):
 
         self.clock.tick(self.FPS)
         
-        # Get latest detection from background thread
-        cameraImage, boardDetected = self.get_latest_detection()
+        # Get latest camera image from background thread
+        cameraImage, _ = self.get_latest_detection()
         
         if cameraImage is None:
-            return
+            # Fallback: get image directly if thread hasn't provided one yet
+            cameraImage = self.ximeaCamera.get_camera_image()
+            if cameraImage is None:
+                return
+        
+        # Run board detection in MAIN THREAD (required for OpenCV windows)
+        # ALWAYS run detection - even before game starts, for calibration
+        boardDetected = self.boardDetection.get_board(cameraImage, self.game)
+        with self.detection_lock:
+            self.latest_board_detection = boardDetected
             
         # Get board coordinates and check for hand
         board_coordinates = self.get_board_coordinates()

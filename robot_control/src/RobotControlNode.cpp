@@ -15,13 +15,15 @@ RobotControlNode::RobotControlNode()
 
     // Subscribers
     checkersBoardSub = this->create_subscription<checkers_msgs::msg::Board>(
-        "board_topic", 10, std::bind(&RobotControlNode::checkers_board_callback, this, std::placeholders::_1));
+        "/board_topic", 10, std::bind(&RobotControlNode::checkers_board_callback, this, std::placeholders::_1));
 
     checkersMoveSub = this->create_subscription<checkers_msgs::msg::Move>(
-        "move_topic", 10, std::bind(&RobotControlNode::checkers_move_callback, this, std::placeholders::_1));
+        "/move_topic", 10, std::bind(&RobotControlNode::checkers_move_callback, this, std::placeholders::_1));
+    
+    RCLCPP_INFO(this->get_logger(), "Subscribed to /move_topic - ready to receive move commands");
         
     handDetectedSub = this->create_subscription<checkers_msgs::msg::HandDetected>(
-        "hand_detected", 10, std::bind(&RobotControlNode::hand_detected_callback, this, std::placeholders::_1));
+        "/hand_detected", 10, std::bind(&RobotControlNode::hand_detected_callback, this, std::placeholders::_1));
 
     handDetectedLMSub = this->create_subscription<std_msgs::msg::String>(
             "leap_gesture", 10, std::bind(&RobotControlNode::hand_detected_lm_callback, this, std::placeholders::_1));
@@ -578,6 +580,14 @@ void RobotControlNode::abortAndClearMovement() {
 }
 
 void RobotControlNode::checkers_move_callback(const checkers_msgs::msg::Move::SharedPtr msg) {
+    RCLCPP_INFO(this->get_logger(), "\n========================================");
+    RCLCPP_INFO(this->get_logger(), "RECEIVED MOVE COMMAND!");
+    RCLCPP_INFO(this->get_logger(), "  From: (%d, %d) -> To: (%d, %d)", 
+                msg->piece_for_moving.row, msg->piece_for_moving.col,
+                msg->target_row, msg->target_col);
+    RCLCPP_INFO(this->get_logger(), "  Removed pieces: %zu", msg->removed_pieces.size());
+    RCLCPP_INFO(this->get_logger(), "========================================\n");
+    
     // Add safety check at the start
     if (!msg) {
         RCLCPP_ERROR(this->get_logger(), "Received null move message!");
