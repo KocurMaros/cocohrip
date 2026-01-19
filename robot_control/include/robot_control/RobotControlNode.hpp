@@ -114,6 +114,7 @@ private:
     float boardOffsetY;     // Y position of square (0,0) center
     float zAttach;          // Height for attaching pieces (min safe Z = 0.155m)
     float zMoving;          // Safe height for moving above board
+    float zMoveOffset;      // Movement offset after placing / grasping a checker
 
     visualization_msgs::msg::MarkerArray marker_array_fake_pieces;
     moveit_msgs::msg::CollisionObject collision_object;

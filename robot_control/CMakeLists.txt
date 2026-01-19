@@ -78,59 +78,59 @@ target_include_directories(robot_control_node PUBLIC
 # ============================================================
 # 3. SimplePoseReader standalone executable
 # ============================================================
-# add_executable(simple_pose_reader src/SimplePoseReader.cpp)
-# ament_target_dependencies(simple_pose_reader
-#     moveit_core
-#     moveit_ros_planning_interface
-#     rclcpp
-#     geometry_msgs
-#     sensor_msgs
-# )
-# target_include_directories(simple_pose_reader PUBLIC
-#     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-#     $<INSTALL_INTERFACE:include>)
+add_executable(simple_pose_reader src/SimplePoseReader.cpp)
+ament_target_dependencies(simple_pose_reader
+    moveit_core
+    moveit_ros_planning_interface
+    rclcpp
+    geometry_msgs
+    sensor_msgs
+)
+target_include_directories(simple_pose_reader PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>)
 
 # ============================================================
 # 4. TestRobotPoseUtility executable (basic test)
 # ============================================================
-# add_executable(test_robot_pose_utility src/TestRobotPoseUtility.cpp)
-# target_link_libraries(test_robot_pose_utility robot_pose_utility)
-# ament_target_dependencies(test_robot_pose_utility
-#     rclcpp
-#     geometry_msgs
-# )
+add_executable(test_robot_pose_utility src/TestRobotPoseUtility.cpp)
+target_link_libraries(test_robot_pose_utility robot_pose_utility)
+ament_target_dependencies(test_robot_pose_utility
+    rclcpp
+    geometry_msgs
+)
 
 # ============================================================
 # 5. TestRobotPoseUtilityComprehensive (comprehensive test suite)
 # ============================================================
-# add_executable(test_robot_pose_utility_comprehensive src/TestRobotPoseUtilityComprehensive.cpp)
-# target_link_libraries(test_robot_pose_utility_comprehensive robot_pose_utility)
-# ament_target_dependencies(test_robot_pose_utility_comprehensive
-#     rclcpp
-#     geometry_msgs
-# )
+add_executable(test_robot_pose_utility_comprehensive src/TestRobotPoseUtilityComprehensive.cpp)
+target_link_libraries(test_robot_pose_utility_comprehensive robot_pose_utility)
+ament_target_dependencies(test_robot_pose_utility_comprehensive
+    rclcpp
+    geometry_msgs
+)
 
 # ============================================================
 # 6. TestMovePublisher executable
 # ============================================================
-# add_executable(test_move_publisher 
-#     src/TestMovePublisher.cpp
-#     src/TestMovePublisherMain.cpp
-# )
-# ament_target_dependencies(test_move_publisher
-#     rclcpp
-#     checkers_msgs
-# )
-# target_include_directories(test_move_publisher PUBLIC
-#     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-#     $<INSTALL_INTERFACE:include>)
+add_executable(test_move_publisher 
+    src/TestMovePublisher.cpp
+    src/TestMovePublisherMain.cpp
+)
+ament_target_dependencies(test_move_publisher
+    rclcpp
+    checkers_msgs
+)
+target_include_directories(test_move_publisher PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>)
 
 # ============================================================
 # Add direct movement test executable
 # ============================================================
-# add_executable(test_direct_move src/TestDirectMove.cpp)
-# ament_target_dependencies(test_direct_move ${dependencies})
-# target_link_libraries(test_direct_move robot_pose_utility)
+add_executable(test_direct_move src/TestDirectMove.cpp)
+ament_target_dependencies(test_direct_move ${dependencies})
+target_link_libraries(test_direct_move robot_pose_utility)
 
 # ============================================================
 # Install targets
@@ -147,11 +147,11 @@ install(TARGETS robot_pose_utility
 # Install executables
 install(TARGETS
     robot_control_node
-    # simple_pose_reader
-    # test_robot_pose_utility
-    # test_robot_pose_utility_comprehensive
-    # test_move_publisher
-    # test_direct_move
+    simple_pose_reader
+    test_robot_pose_utility
+    test_robot_pose_utility_comprehensive
+    test_move_publisher
+    test_direct_move
     DESTINATION lib/${PROJECT_NAME}
 )
 

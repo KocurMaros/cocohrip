@@ -1,0 +1,227 @@
+[robot_control_node-1] [INFO] [1762761486.997668125] [robot_control_node]: [RobotPoseUtility] MoveGroup configuration:
+[robot_control_node-1] [INFO] [1762761486.997675661] [robot_control_node]:   - Planning group: ur5e_arm
+[robot_control_node-1] [INFO] [1762761486.997679152] [robot_control_node]:   - End effector: ur5e_tool0
+[robot_control_node-1] [INFO] [1762761486.997681504] [robot_control_node]:   - Planning time: 15.0 s
+[robot_control_node-1] [INFO] [1762761486.997686936] [robot_control_node]:   - Planning attempts: 20
+[robot_control_node-1] [INFO] [1762761486.997689431] [robot_control_node]: [RobotPoseUtility] Waiting for joint states...
+[robot_control_node-1] [INFO] [1762761487.098045262] [robot_control_node]: [RobotPoseUtility] Initialization complete!
+[robot_control_node-1] [INFO] [1762761487.098073513] [robot_control_node]: RobotPoseUtility initialized successfully
+[robot_control_node-1] [INFO] [1762761490.098597927] [robot_control_node]: Robot Control Node started successfully!
+[robot_control_node-1] [INFO] [1762761540.393847535] [robot_control_node]: Moving from [1.1828, 0.2011] to [0.8736, 0.3841], distance: 0.3593 m
+[robot_control_node-1] [INFO] [1762761540.393876642] [robot_control_node]: Added high waypoint at Z=0.35 (distance: 0.36 m)
+[robot_control_node-1] [INFO] [1762761540.393880827] [robot_control_node]: Prepared trajectory with 4 poses
+[robot_control_node-1] [INFO] [1762761540.399044032] [robot_control_node]: [RobotPoseUtility] Moving to Cartesian pose
+[robot_control_node-1] [INFO] [1762761540.399470343] [robot_control_node.moveit.ros.move_group_interface]: MoveGroup action client/server ready
+[robot_control_node-1] [INFO] [1762761540.400493445] [robot_control_node.moveit.ros.move_group_interface]: Planning request accepted
+[robot_control_node-1] [INFO] [1762761540.448949514] [robot_control_node.moveit.ros.move_group_interface]: Planning request complete!
+[robot_control_node-1] [INFO] [1762761540.449052814] [robot_control_node.moveit.ros.move_group_interface]: time taken to generate plan: 0.0394584 seconds
+[robot_control_node-1] [INFO] [1762761540.449093736] [robot_control_node]: [RobotPoseUtility] Planning successful!
+[robot_control_node-1] [INFO] [1762761540.450064394] [robot_control_node.moveit.ros.move_group_interface]: Execute request accepted
+[robot_control_node-1] [INFO] [1762761544.759243245] [robot_control_node.moveit.ros.move_group_interface]: Execute request success!
+[robot_control_node-1] [INFO] [1762761544.759533593] [robot_control_node]: [RobotPoseUtility] Movement successful!
+[robot_control_node-1] [WARN] [1762761544.798812707] [robot_control_node]: [RobotPoseUtility] Target Z (0.1500) below minimum (0.1600)! Clamping to minimum.
+[robot_control_node-1] [INFO] [1762761544.798848905] [robot_control_node]: [RobotPoseUtility] Moving to Cartesian pose
+[robot_control_node-1] [INFO] [1762761544.799044728] [robot_control_node.moveit.ros.move_group_interface]: MoveGroup action client/server ready
+[robot_control_node-1] [INFO] [1762761544.799438196] [robot_control_node.moveit.ros.move_group_interface]: Planning request accepted
+[robot_control_node-1] [INFO] [1762761544.836940545] [robot_control_node.moveit.ros.move_group_interface]: Planning request complete!
+[robot_control_node-1] [INFO] [1762761544.837005964] [robot_control_node.moveit.ros.move_group_interface]: time taken to generate plan: 0.0323245 seconds
+[robot_control_node-1] [INFO] [1762761544.837036694] [robot_control_node]: [RobotPoseUtility] Planning successful!
+[robot_control_node-1] [INFO] [1762761544.837677383] [robot_control_node.moveit.ros.move_group_interface]: Execute request accepted
+[robot_control_node-1] [INFO] [1762761548.647126385] [robot_control_node.moveit.ros.move_group_interface]: Execute request success!
+[robot_control_node-1] [INFO] [1762761548.647199092] [robot_control_node]: [RobotPoseUtility] Movement successful!
+[robot_control_node-1] [WARN] [1762761548.698870223] [robot_control_node]: [RobotPoseUtility] Target Z (0.1443) below minimum (0.1600)! Clamping to minimum.
+[robot_control_node-1] [INFO] [1762761548.698911213] [robot_control_node]: [RobotPoseUtility] Moving to Cartesian pose
+[robot_control_node-1] [INFO] [1762761548.699112761] [robot_control_node.moveit.ros.move_group_interface]: MoveGroup action client/server ready
+[robot_control_node-1] [INFO] [1762761548.699586068] [robot_control_node.moveit.ros.move_group_interface]: Planning request accepted
+[robot_control_node-1] [INFO] [1762761548.729809164] [robot_control_node.moveit.ros.move_group_interface]: Planning request complete!
+[robot_control_node-1] [INFO] [1762761548.729855400] [robot_control_node.moveit.ros.move_group_interface]: time taken to generate plan: 0.0276568 seconds
+[robot_control_node-1] [INFO] [1762761548.729875686] [robot_control_node]: [RobotPoseUtility] Planning successful!
+[robot_control_node-1] [INFO] [1762761548.730330575] [robot_control_node.moveit.ros.move_group_interface]: Execute request accepted
+[robot_control_node-1] [INFO] [1762761549.187059014] [robot_control_node.moveit.ros.move_group_interface]: Execute request success!
+[robot_control_node-1] [INFO] [1762761549.188073036] [robot_control_node]: [RobotPoseUtility] Movement successful!
+[robot_control_node-1] [INFO] [1762761549.266578849] [robot_control_node]: Attach piece using planning scene interface
+[robot_control_node-1] [WARN] [1762761552.276683271] [robot_control_node]: [RobotPoseUtility] Target Z (0.1500) below minimum (0.1600)! Clamping to minimum.
+[robot_control_node-1] [INFO] [1762761552.276716502] [robot_control_node]: [RobotPoseUtility] Moving to Cartesian pose
+[robot_control_node-1] [INFO] [1762761552.276880452] [robot_control_node.moveit.ros.move_group_interface]: MoveGroup action client/server ready
+[robot_control_node-1] [INFO] [1762761552.277365583] [robot_control_node.moveit.ros.move_group_interface]: Planning request accepted
+[robot_control_node-1] [INFO] [1762761552.311793530] [robot_control_node.moveit.ros.move_group_interface]: Planning request complete!
+[robot_control_node-1] [INFO] [1762761552.311859299] [robot_control_node.moveit.ros.move_group_interface]: time taken to generate plan: 0.0314007 seconds
+[robot_control_node-1] [INFO] [1762761552.311880071] [robot_control_node]: [RobotPoseUtility] Planning successful!
+[robot_control_node-1] [INFO] [1762761552.312539783] [robot_control_node.moveit.ros.move_group_interface]: Execute request accepted
+[robot_control_node-1] [INFO] [1762761552.671526202] [robot_control_node.moveit.ros.move_group_interface]: Execute request success!
+[robot_control_node-1] [INFO] [1762761552.672061491] [robot_control_node]: [RobotPoseUtility] Movement successful!
+[robot_control_node-1] [INFO] [1762761552.698664904] [robot_control_node]: Move complete! Piece placed at (7,5). Returning to HOME...
+[robot_control_node-1] [INFO] [1762761552.698720823] [robot_control_node]: Moving to named target: home
+[robot_control_node-1] [INFO] [1762761552.698741048] [robot_control_node]: [RobotPoseUtility] Moving to named target: home
+[robot_control_node-1] [INFO] [1762761552.698922726] [robot_control_node.moveit.ros.move_group_interface]: MoveGroup action client/server ready
+[robot_control_node-1] [INFO] [1762761552.699238476] [robot_control_node.moveit.ros.move_group_interface]: Planning request accepted
+[robot_control_node-1] [INFO] [1762761552.729254857] [robot_control_node.moveit.ros.move_group_interface]: Planning request complete!
+[robot_control_node-1] [INFO] [1762761552.729895665] [robot_control_node.moveit.ros.move_group_interface]: time taken to generate plan: 0.0239869 seconds
+[robot_control_node-1] [INFO] [1762761552.729921649] [robot_control_node]: [RobotPoseUtility] Planning successful!
+[robot_control_node-1] [INFO] [1762761552.730431380] [robot_control_node.moveit.ros.move_group_interface]: Execute request accepted
+[robot_control_node-1] [INFO] [1762761557.286709761] [robot_control_node]: ✅ Robot reached HOME position
+[robot_control_node-1] [INFO] [1762761557.286837773] [robot_control_node]: Moving from [1.1861, 0.2015] to [0.8161, 0.3266], distance: 0.3906 m
+[robot_control_node-1] [INFO] [1762761557.286852118] [robot_control_node]: Added high waypoint at Z=0.35 (distance: 0.39 m)
+[robot_control_node-1] [INFO] [1762761557.286857650] [robot_control_node]: 📋 Prepared trajectory for mission 1
+[robot_control_node-1] [INFO] [1762761557.339036650] [robot_control_node.moveit.ros.move_group_interface]: Execute request success!
+[robot_control_node-1] [INFO] [1762761557.339200593] [robot_control_node]: [RobotPoseUtility] Movement completed!
+[robot_control_node-1] [INFO] [1762761557.339224293] [robot_control_node]: ✅ Reached 'home' position
+[robot_control_node-1] [INFO] [1762761557.339309666] [robot_control_node]: [RobotPoseUtility] Moving to Cartesian pose
+[robot_control_node-1] [INFO] [1762761557.339486799] [robot_control_node.moveit.ros.move_group_interface]: MoveGroup action client/server ready
+[robot_control_node-1] [INFO] [1762761557.339806692] [robot_control_node.moveit.ros.move_group_interface]: Planning request accepted
+[robot_control_node-1] [INFO] [1762761557.379947678] [robot_control_node.moveit.ros.move_group_interface]: Planning request complete!
+[robot_control_node-1] [INFO] [1762761557.380765404] [robot_control_node.moveit.ros.move_group_interface]: time taken to generate plan: 0.0359266 seconds
+[robot_control_node-1] [INFO] [1762761557.380822037] [robot_control_node]: [RobotPoseUtility] Planning successful!
+[robot_control_node-1] [INFO] [1762761557.381325840] [robot_control_node.moveit.ros.move_group_interface]: Execute request accepted
+[robot_control_node-1] [INFO] [1762761561.641351448] [robot_control_node.moveit.ros.move_group_interface]: Execute request success!
+[robot_control_node-1] [INFO] [1762761561.641951029] [robot_control_node]: [RobotPoseUtility] Movement successful!
+[robot_control_node-1] [WARN] [1762761561.642118950] [robot_control_node]: [RobotPoseUtility] Target Z (0.1500) below minimum (0.1600)! Clamping to minimum.
+[robot_control_node-1] [INFO] [1762761561.642154029] [robot_control_node]: [RobotPoseUtility] Moving to Cartesian pose
+[robot_control_node-1] [INFO] [1762761561.642560948] [robot_control_node.moveit.ros.move_group_interface]: MoveGroup action client/server ready
+[robot_control_node-1] [INFO] [1762761561.643711335] [robot_control_node.moveit.ros.move_group_interface]: Planning request accepted
+[robot_control_node-1] [INFO] [1762761561.685650600] [robot_control_node.moveit.ros.move_group_interface]: Planning request complete!
+[robot_control_node-1] [INFO] [1762761561.685825992] [robot_control_node.moveit.ros.move_group_interface]: time taken to generate plan: 0.0376948 seconds
+[robot_control_node-1] [INFO] [1762761561.685845802] [robot_control_node]: [RobotPoseUtility] Planning successful!
+[robot_control_node-1] [INFO] [1762761561.686389990] [robot_control_node.moveit.ros.move_group_interface]: Execute request accepted
+[robot_control_node-1] [INFO] [1762761565.145129807] [robot_control_node.moveit.ros.move_group_interface]: Execute request success!
+[robot_control_node-1] [INFO] [1762761565.145991504] [robot_control_node]: [RobotPoseUtility] Movement successful!
+[robot_control_node-1] [WARN] [1762761565.146109588] [robot_control_node]: [RobotPoseUtility] Target Z (0.1443) below minimum (0.1600)! Clamping to minimum.
+[robot_control_node-1] [INFO] [1762761565.146140362] [robot_control_node]: [RobotPoseUtility] Moving to Cartesian pose
+[robot_control_node-1] [INFO] [1762761565.146338267] [robot_control_node.moveit.ros.move_group_interface]: MoveGroup action client/server ready
+[robot_control_node-1] [INFO] [1762761565.146886493] [robot_control_node.moveit.ros.move_group_interface]: Planning request accepted
+[robot_control_node-1] [INFO] [1762761565.180982345] [robot_control_node.moveit.ros.move_group_interface]: Planning request complete!
+[robot_control_node-1] [INFO] [1762761565.181996961] [robot_control_node.moveit.ros.move_group_interface]: time taken to generate plan: 0.0303274 seconds
+[robot_control_node-1] [INFO] [1762761565.182024520] [robot_control_node]: [RobotPoseUtility] Planning successful!
+[robot_control_node-1] [INFO] [1762761565.182693506] [robot_control_node.moveit.ros.move_group_interface]: Execute request accepted
+[robot_control_node-1] [INFO] [1762761565.221000227] [robot_control_node]: Detach piece using planning scene interface
+[robot_control_node-1] [INFO] [1762761565.541059735] [robot_control_node.moveit.ros.move_group_interface]: Execute request success!
+[robot_control_node-1] [INFO] [1762761565.541336269] [robot_control_node]: [RobotPoseUtility] Movement successful!
+[robot_control_node-1] [WARN] [1762761568.270759509] [robot_control_node]: [RobotPoseUtility] Target Z (0.1500) below minimum (0.1600)! Clamping to minimum.
+[robot_control_node-1] [INFO] [1762761568.270799291] [robot_control_node]: [RobotPoseUtility] Moving to Cartesian pose
+[robot_control_node-1] [INFO] [1762761568.271013238] [robot_control_node.moveit.ros.move_group_interface]: MoveGroup action client/server ready
+[robot_control_node-1] [INFO] [1762761568.271316000] [robot_control_node.moveit.ros.move_group_interface]: Planning request accepted
+[robot_control_node-1] [INFO] [1762761568.296107917] [robot_control_node.moveit.ros.move_group_interface]: Planning request complete!
+[robot_control_node-1] [INFO] [1762761568.296353540] [robot_control_node.moveit.ros.move_group_interface]: time taken to generate plan: 0.0217113 seconds
+[robot_control_node-1] [INFO] [1762761568.296381620] [robot_control_node]: [RobotPoseUtility] Planning successful!
+[robot_control_node-1] [INFO] [1762761568.297269427] [robot_control_node.moveit.ros.move_group_interface]: Execute request accepted
+[robot_control_node-1] [INFO] [1762761568.657761736] [robot_control_node.moveit.ros.move_group_interface]: Execute request success!
+[robot_control_node-1] [INFO] [1762761568.658188782] [robot_control_node]: [RobotPoseUtility] Movement successful!
+[robot_control_node-1] [INFO] [1762761568.698698676] [robot_control_node]: All moves complete! Final return to HOME...
+[robot_control_node-1] [INFO] [1762761568.698756804] [robot_control_node]: Moving to final named target: home
+[robot_control_node-1] [INFO] [1762761568.698777920] [robot_control_node]: [RobotPoseUtility] Moving to named target: home
+[robot_control_node-1] [INFO] [1762761568.698951109] [robot_control_node.moveit.ros.move_group_interface]: MoveGroup action client/server ready
+[robot_control_node-1] [INFO] [1762761568.699722368] [robot_control_node.moveit.ros.move_group_interface]: Planning request accepted
+[robot_control_node-1] [INFO] [1762761568.724451636] [robot_control_node.moveit.ros.move_group_interface]: Planning request complete!
+[robot_control_node-1] [INFO] [1762761568.724837836] [robot_control_node.moveit.ros.move_group_interface]: time taken to generate plan: 0.0177842 seconds
+[robot_control_node-1] [INFO] [1762761568.724859264] [robot_control_node]: [RobotPoseUtility] Planning successful!
+[robot_control_node-1] [INFO] [1762761568.725541010] [robot_control_node.moveit.ros.move_group_interface]: Execute request accepted
+[robot_control_node-1] [INFO] [1762761573.152720022] [robot_control_node]: ✅ Robot reached HOME position
+[robot_control_node-1] [INFO] [1762761573.185330894] [robot_control_node.moveit.ros.move_group_interface]: Execute request success!
+[robot_control_node-1] [INFO] [1762761573.186254897] [robot_control_node]: [RobotPoseUtility] Movement completed!
+[robot_control_node-1] [INFO] [1762761573.186288902] [robot_control_node]: ✅ Reached final 'home' position
+
+
+
+
+ [robot_control_node-1] [INFO] [1762761685.965183469] [robot_control_node]: Moving from [1.1860, 0.2014] to [0.8161, 0.3266], distance: 0.3905 m
+[robot_control_node-1] [INFO] [1762761685.965230549] [robot_control_node]: Added high waypoint at Z=0.35 (distance: 0.39 m)
+[robot_control_node-1] [INFO] [1762761685.965235853] [robot_control_node]: Prepared trajectory with 4 poses
+[robot_control_node-1] [INFO] [1762761685.998764335] [robot_control_node]: [RobotPoseUtility] Moving to Cartesian pose
+[robot_control_node-1] [INFO] [1762761685.998964018] [robot_control_node.moveit.ros.move_group_interface]: MoveGroup action client/server ready
+[robot_control_node-1] [INFO] [1762761685.999882431] [robot_control_node.moveit.ros.move_group_interface]: Planning request accepted
+[robot_control_node-1] [INFO] [1762761686.032945453] [robot_control_node.moveit.ros.move_group_interface]: Planning request complete!
+[robot_control_node-1] [INFO] [1762761686.033486886] [robot_control_node.moveit.ros.move_group_interface]: time taken to generate plan: 0.0279878 seconds
+[robot_control_node-1] [INFO] [1762761686.033509616] [robot_control_node]: [RobotPoseUtility] Planning successful!
+[robot_control_node-1] [INFO] [1762761686.033993979] [robot_control_node.moveit.ros.move_group_interface]: Execute request accepted
+[robot_control_node-1] [INFO] [1762761690.295330314] [robot_control_node.moveit.ros.move_group_interface]: Execute request success!
+[robot_control_node-1] [INFO] [1762761690.296302146] [robot_control_node]: [RobotPoseUtility] Movement successful!
+[robot_control_node-1] [WARN] [1762761690.298826054] [robot_control_node]: [RobotPoseUtility] Target Z (0.1500) below minimum (0.1600)! Clamping to minimum.
+[robot_control_node-1] [INFO] [1762761690.298856527] [robot_control_node]: [RobotPoseUtility] Moving to Cartesian pose
+[robot_control_node-1] [INFO] [1762761690.299066314] [robot_control_node.moveit.ros.move_group_interface]: MoveGroup action client/server ready
+[robot_control_node-1] [INFO] [1762761690.299503361] [robot_control_node.moveit.ros.move_group_interface]: Planning request accepted
+[robot_control_node-1] [INFO] [1762761690.339392731] [robot_control_node.moveit.ros.move_group_interface]: Planning request complete!
+[robot_control_node-1] [INFO] [1762761690.339912326] [robot_control_node.moveit.ros.move_group_interface]: time taken to generate plan: 0.0346852 seconds
+[robot_control_node-1] [INFO] [1762761690.339971734] [robot_control_node]: [RobotPoseUtility] Planning successful!
+[robot_control_node-1] [INFO] [1762761690.342544507] [robot_control_node.moveit.ros.move_group_interface]: Execute request accepted
+[robot_control_node-1] [INFO] [1762761693.850980505] [robot_control_node.moveit.ros.move_group_interface]: Execute request success!
+[robot_control_node-1] [INFO] [1762761693.851187914] [robot_control_node]: [RobotPoseUtility] Movement successful!
+[robot_control_node-1] [WARN] [1762761693.898869282] [robot_control_node]: [RobotPoseUtility] Target Z (0.1443) below minimum (0.1600)! Clamping to minimum.
+[robot_control_node-1] [INFO] [1762761693.898916471] [robot_control_node]: [RobotPoseUtility] Moving to Cartesian pose
+[robot_control_node-1] [INFO] [1762761693.899171887] [robot_control_node.moveit.ros.move_group_interface]: MoveGroup action client/server ready
+[robot_control_node-1] [INFO] [1762761693.899600372] [robot_control_node.moveit.ros.move_group_interface]: Planning request accepted
+[robot_control_node-1] [INFO] [1762761693.920931108] [robot_control_node.moveit.ros.move_group_interface]: Planning request complete!
+[robot_control_node-1] [INFO] [1762761693.921146672] [robot_control_node.moveit.ros.move_group_interface]: time taken to generate plan: 0.0185384 seconds
+[robot_control_node-1] [INFO] [1762761693.921164428] [robot_control_node]: [RobotPoseUtility] Planning successful!
+[robot_control_node-1] [INFO] [1762761693.921502880] [robot_control_node.moveit.ros.move_group_interface]: Execute request accepted
+[robot_control_node-1] [INFO] [1762761694.381699631] [robot_control_node.moveit.ros.move_group_interface]: Execute request success!
+[robot_control_node-1] [INFO] [1762761694.381912288] [robot_control_node]: [RobotPoseUtility] Movement successful!
+[robot_control_node-1] [INFO] [1762761694.462060894] [robot_control_node]: Attach piece using planning scene interface
+[robot_control_node-1] [WARN] [1762761697.477509883] [robot_control_node]: [RobotPoseUtility] Target Z (0.1500) below minimum (0.1600)! Clamping to minimum.
+[robot_control_node-1] [INFO] [1762761697.477654786] [robot_control_node]: [RobotPoseUtility] Moving to Cartesian pose
+[robot_control_node-1] [INFO] [1762761697.478215181] [robot_control_node.moveit.ros.move_group_interface]: MoveGroup action client/server ready
+[robot_control_node-1] [INFO] [1762761697.479997444] [robot_control_node.moveit.ros.move_group_interface]: Planning request accepted
+[robot_control_node-1] [INFO] [1762761697.503398792] [robot_control_node.moveit.ros.move_group_interface]: Planning request complete!
+[robot_control_node-1] [INFO] [1762761697.503942238] [robot_control_node.moveit.ros.move_group_interface]: time taken to generate plan: 0.0202724 seconds
+[robot_control_node-1] [INFO] [1762761697.503962707] [robot_control_node]: [RobotPoseUtility] Planning successful!
+[robot_control_node-1] [INFO] [1762761697.504443127] [robot_control_node.moveit.ros.move_group_interface]: Execute request accepted
+[robot_control_node-1] [INFO] [1762761697.898808190] [robot_control_node]: Move complete! Piece placed at (6,4). Returning to HOME...
+[robot_control_node-1] [INFO] [1762761697.913173294] [robot_control_node.moveit.ros.move_group_interface]: Execute request success!
+[robot_control_node-1] [INFO] [1762761697.913896598] [robot_control_node]: [RobotPoseUtility] Movement successful!
+[robot_control_node-1] [INFO] [1762761697.913983281] [robot_control_node]: Moving to named target: home
+[robot_control_node-1] [INFO] [1762761697.913998396] [robot_control_node]: [RobotPoseUtility] Moving to named target: home
+[robot_control_node-1] [INFO] [1762761697.914107511] [robot_control_node]: ✅ Robot reached HOME position
+[robot_control_node-1] [INFO] [1762761697.914200033] [robot_control_node]: Moving from [0.8177, 0.3251] to [0.8736, 0.2691], distance: 0.0792 m
+[robot_control_node-1] [INFO] [1762761697.914216568] [robot_control_node]: 📋 Prepared trajectory for mission 1
+[robot_control_node-1] [INFO] [1762761697.914272863] [robot_control_node.moveit.ros.move_group_interface]: MoveGroup action client/server ready
+[robot_control_node-1] [INFO] [1762761697.914670354] [robot_control_node.moveit.ros.move_group_interface]: Planning request accepted
+[robot_control_node-1] [INFO] [1762761697.946013582] [robot_control_node.moveit.ros.move_group_interface]: Planning request complete!
+[robot_control_node-1] [INFO] [1762761697.946876394] [robot_control_node.moveit.ros.move_group_interface]: time taken to generate plan: 0.0253975 seconds
+[robot_control_node-1] [INFO] [1762761697.946903120] [robot_control_node]: [RobotPoseUtility] Planning successful!
+[robot_control_node-1] [INFO] [1762761697.947316223] [robot_control_node.moveit.ros.move_group_interface]: Execute request accepted
+[robot_control_node-1] [INFO] [1762761702.405121384] [robot_control_node.moveit.ros.move_group_interface]: Execute request success!
+[robot_control_node-1] [INFO] [1762761702.405985721] [robot_control_node]: [RobotPoseUtility] Movement completed!
+[robot_control_node-1] [INFO] [1762761702.406018884] [robot_control_node]: ✅ Reached 'home' position
+[robot_control_node-1] [WARN] [1762761702.406116018] [robot_control_node]: [RobotPoseUtility] Target Z (0.1500) below minimum (0.1600)! Clamping to minimum.
+[robot_control_node-1] [INFO] [1762761702.406146686] [robot_control_node]: [RobotPoseUtility] Moving to Cartesian pose
+[robot_control_node-1] [INFO] [1762761702.406516749] [robot_control_node.moveit.ros.move_group_interface]: MoveGroup action client/server ready
+[robot_control_node-1] [INFO] [1762761702.407313513] [robot_control_node.moveit.ros.move_group_interface]: Planning request accepted
+[robot_control_node-1] [INFO] [1762761702.448250370] [robot_control_node.moveit.ros.move_group_interface]: Planning request complete!
+[robot_control_node-1] [INFO] [1762761702.448984653] [robot_control_node.moveit.ros.move_group_interface]: time taken to generate plan: 0.0356732 seconds
+[robot_control_node-1] [INFO] [1762761702.449019399] [robot_control_node]: [RobotPoseUtility] Planning successful!
+[robot_control_node-1] [INFO] [1762761702.449567550] [robot_control_node.moveit.ros.move_group_interface]: Execute request accepted
+[robot_control_node-1] [INFO] [1762761706.859119592] [robot_control_node.moveit.ros.move_group_interface]: Execute request success!
+[robot_control_node-1] [INFO] [1762761706.859255790] [robot_control_node]: [RobotPoseUtility] Movement successful!
+[robot_control_node-1] [WARN] [1762761706.859354984] [robot_control_node]: [RobotPoseUtility] Target Z (0.1443) below minimum (0.1600)! Clamping to minimum.
+[robot_control_node-1] [INFO] [1762761706.859377616] [robot_control_node]: [RobotPoseUtility] Moving to Cartesian pose
+[robot_control_node-1] [INFO] [1762761706.859574274] [robot_control_node.moveit.ros.move_group_interface]: MoveGroup action client/server ready
+[robot_control_node-1] [INFO] [1762761706.859864602] [robot_control_node.moveit.ros.move_group_interface]: Planning request accepted
+[robot_control_node-1] [INFO] [1762761706.882435751] [robot_control_node.moveit.ros.move_group_interface]: Planning request complete!
+[robot_control_node-1] [INFO] [1762761706.882882703] [robot_control_node.moveit.ros.move_group_interface]: time taken to generate plan: 0.0200248 seconds
+[robot_control_node-1] [INFO] [1762761706.882912673] [robot_control_node]: [RobotPoseUtility] Planning successful!
+[robot_control_node-1] [INFO] [1762761706.883473489] [robot_control_node.moveit.ros.move_group_interface]: Execute request accepted
+[robot_control_node-1] [INFO] [1762761706.918618766] [robot_control_node]: Detach piece using planning scene interface
+[robot_control_node-1] [INFO] [1762761707.393036777] [robot_control_node.moveit.ros.move_group_interface]: Execute request success!
+[robot_control_node-1] [INFO] [1762761707.393728481] [robot_control_node]: [RobotPoseUtility] Movement successful!
+[robot_control_node-1] [WARN] [1762761709.967259265] [robot_control_node]: [RobotPoseUtility] Target Z (0.1500) below minimum (0.1600)! Clamping to minimum.
+[robot_control_node-1] [INFO] [1762761709.967298107] [robot_control_node]: [RobotPoseUtility] Moving to Cartesian pose
+[robot_control_node-1] [INFO] [1762761709.967469122] [robot_control_node.moveit.ros.move_group_interface]: MoveGroup action client/server ready
+[robot_control_node-1] [INFO] [1762761709.967870239] [robot_control_node.moveit.ros.move_group_interface]: Planning request accepted
+[robot_control_node-1] [INFO] [1762761709.993505765] [robot_control_node.moveit.ros.move_group_interface]: Planning request complete!
+[robot_control_node-1] [INFO] [1762761709.994498499] [robot_control_node.moveit.ros.move_group_interface]: time taken to generate plan: 0.0225597 seconds
+[robot_control_node-1] [INFO] [1762761709.994531523] [robot_control_node]: [RobotPoseUtility] Planning successful!
+[robot_control_node-1] [INFO] [1762761709.995251723] [robot_control_node.moveit.ros.move_group_interface]: Execute request accepted
+[robot_control_node-1] [INFO] [1762761710.298814214] [robot_control_node]: All moves complete! Final return to HOME...
+[robot_control_node-1] [INFO] [1762761710.305528709] [robot_control_node.moveit.ros.move_group_interface]: Execute request success!
+[robot_control_node-1] [INFO] [1762761710.305790392] [robot_control_node]: [RobotPoseUtility] Movement successful!
+[robot_control_node-1] [INFO] [1762761710.305879799] [robot_control_node]: Moving to final named target: home
+[robot_control_node-1] [INFO] [1762761710.305899808] [robot_control_node]: [RobotPoseUtility] Moving to named target: home
+[robot_control_node-1] [INFO] [1762761710.305944874] [robot_control_node]: ✅ Robot reached HOME position
+[robot_control_node-1] [INFO] [1762761710.306100839] [robot_control_node.moveit.ros.move_group_interface]: MoveGroup action client/server ready
+[robot_control_node-1] [INFO] [1762761710.307311366] [robot_control_node.moveit.ros.move_group_interface]: Planning request accepted
+[robot_control_node-1] [INFO] [1762761710.343956348] [robot_control_node.moveit.ros.move_group_interface]: Planning request complete!
+[robot_control_node-1] [INFO] [1762761710.344077664] [robot_control_node.moveit.ros.move_group_interface]: time taken to generate plan: 0.0305283 seconds
+[robot_control_node-1] [INFO] [1762761710.344108681] [robot_control_node]: [RobotPoseUtility] Planning successful!
+[robot_control_node-1] [INFO] [1762761710.344924884] [robot_control_node.moveit.ros.move_group_interface]: Execute request accepted
+[robot_control_node-1] [INFO] [1762761714.755106079] [robot_control_node.moveit.ros.move_group_interface]: Execute request success!
+[robot_control_node-1] [INFO] [1762761714.755231734] [robot_control_node]: [RobotPoseUtility] Movement completed!
+[robot_control_node-1] [INFO] [1762761714.755258093] [robot_control_node]: ✅ Reached final 'home' position

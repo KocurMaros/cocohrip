@@ -2,12 +2,14 @@
 source ~/amavet_ws/install/setup.bash && ros2 launch cocohrip_control bringup_all.launch.py
 source ~/amavet_ws/install/setup.bash && ros2 launch robot_control new_launch.py
 //optional
-ros2 run leap_gesture_interface leap_example_node
-// if needed
+source ~/amavet_ws/install/setup.bash && ros2 run leap_gesture_interface leap_example_node
+// if needed only after rebooting computer
 sudo tee /sys/module/usbcore/parameters/usbfs_memory_mb >/dev/null <<<0
 cd ~/amavet_ws && source install/setup.bash && ros2 launch checkers_game checkers_game_launch.launch.py
 
-start corner top left
+start corner H1 continue A1 A8 and H8
+set thresholds empty fields significantly lower than black piece and 
+black threshold slightly higher than biggest value on black piece
 
-
+// here you can check what piece robot should move
 ros2 topic echo /move_topic

@@ -9,6 +9,7 @@ RobotControlNode::RobotControlNode()
           tf_listener(std::make_shared<tf2_ros::TransformListener>(*tf_buffer)) {
 
     // Publishers
+    zMoveOffset = 0.10;
     chessBoardPub = this->create_publisher<visualization_msgs::msg::MarkerArray>("visualization_marker_array", 10);
     robotMovePub = this->create_publisher<checkers_msgs::msg::RobotMove>("robot_move_topic", 10);
 
@@ -49,11 +50,11 @@ RobotControlNode::RobotControlNode()
     // Real-world measured board corners (center of corner squares)
     // Closest to robot (bottom-right corner at position 7,7)
     float corner_near_x = 0.8736;
-    float corner_near_y = 0.4882;
+    float corner_near_y = 0.4882+0.01;
     
     // Farthest from robot (top-left corner at position 0,0)
     float corner_far_x = 0.4711;
-    float corner_far_y = 0.0866;
+    float corner_far_y = 0.0866+0.01;
     
     // Calculate square size from measured corners
     square_size = (corner_near_x - corner_far_x) / 7.0;  // Distance across 7 squares
@@ -92,7 +93,7 @@ void RobotControlNode::initMoveGroup() {
         return;
     }
 
-    pose_utility_->setVelocityScaling(0.8);
+    pose_utility_->setVelocityScaling(1);
     pose_utility_->setAccelerationScaling(0.04);
 
     RCLCPP_INFO(this->get_logger(), "RobotPoseUtility initialized successfully");
@@ -103,6 +104,7 @@ void RobotControlNode::initMoveGroup() {
 }
 
 void RobotControlNode::openGripper() {
+    RCLCPP_INFO(this->get_logger(), "Opening gripper");
     auto request = std::make_shared<gripper_srv::srv::GripperService::Request>();
     request->position = 0;
     request->speed = 5;
@@ -112,6 +114,7 @@ void RobotControlNode::openGripper() {
 }
 
 void RobotControlNode::closeGripper() {
+    RCLCPP_INFO(this->get_logger(), "Closing gripper");
     auto request = std::make_shared<gripper_srv::srv::GripperService::Request>();
     request->position = 111;
     request->speed = 5;
@@ -261,13 +264,16 @@ void RobotControlNode::mainLoop() {
                     moveThread->join();
                 }
                 moveThread = std::make_unique<std::thread>([this]() {
-                    RCLCPP_INFO(this->get_logger(), "Moving to named target: home");
-                    bool success = pose_utility_->moveToNamedTarget("home");
+                    RCLCPP_INFO(this->get_logger(), "Moving to named target: fake home");
+                    geometry_msgs::msg::Pose current_pose = getPose();
+                    current_pose.position.z += zMoveOffset;
+
+                    bool success = pose_utility_->moveToPose(current_pose);
                     
                     if (success) {
-                        RCLCPP_INFO(this->get_logger(), "✅ Reached 'home' position");
+                        RCLCPP_INFO(this->get_logger(), "✅ Reached 'fake home' position");
                     } else {
-                        RCLCPP_ERROR(this->get_logger(), "❌ Failed to reach 'home' position!");
+                        RCLCPP_ERROR(this->get_logger(), "❌ Failed to reach 'fake home' position!");
                     }
                     
                     isRobotMoving = false;
@@ -277,7 +283,7 @@ void RobotControlNode::mainLoop() {
                         currentFileName = "robot_data_" + std::to_string(fileIndex) + ".csv";
                         isRobotSendingHome = false;
                         
-                        RCLCPP_INFO(this->get_logger(), "✅ Robot reached HOME position");
+                        RCLCPP_INFO(this->get_logger(), "✅ Robot reached FAKE HOME position");
                         
                         // Publish robot move done message
                         auto message = checkers_msgs::msg::RobotMove();
@@ -314,7 +320,11 @@ void RobotControlNode::mainLoop() {
             }
             moveThread = std::make_unique<std::thread>([this]() {
                 RCLCPP_INFO(this->get_logger(), "Moving to final named target: home");
-                bool success = pose_utility_->moveToNamedTarget("home");
+                geometry_msgs::msg::Pose current_pose = getPose();
+                current_pose.position.z += zMoveOffset;
+                bool success = pose_utility_->moveToPose(current_pose);
+
+                success = pose_utility_->moveToNamedTarget("home") && success;
                 
                 if (success) {
                     RCLCPP_INFO(this->get_logger(), "✅ Reached final 'home' position");
@@ -342,6 +352,7 @@ void RobotControlNode::mainLoop() {
 
 void RobotControlNode::makeTask(Mission mission) {
     doingTask = true;
+    RCLCPP_INFO(this->get_logger(), "Making task");
 
     Task task = mission.task;
     int row = mission.row;
@@ -353,11 +364,11 @@ void RobotControlNode::makeTask(Mission mission) {
     if(task == Task::ATTACH) {
         removeFakePiece(pieceID);
         createPiece(row, col);
-        attachPiece();
+        // attachPiece();
         closeGripper();
     }
     else {
-        detachPiece();
+        // detachPiece();
         removePiece();
         createFakePieceWithColor(pieceID, row, col, color);
         chessBoardPub->publish(marker_array_fake_pieces);
@@ -423,6 +434,9 @@ void RobotControlNode::move(geometry_msgs::msg::Pose targetPose) {
 }
 
 void RobotControlNode::moveInThread(geometry_msgs::msg::Pose targetPose) {
+    RCLCPP_INFO(this->get_logger(), 
+                   "Moving to position: [%f, %f, %f]", 
+                   targetPose.position.x, targetPose.position.y, targetPose.position.z);
     if (moveThread && moveThread->joinable()) {
         moveThread->join();
     }
@@ -591,7 +605,7 @@ void RobotControlNode::checkers_move_callback(const checkers_msgs::msg::Move::Sh
                    row, col, storage_row, storage_col);
 
         targetPositions.push_back(Mission(row, col, whiteColorString, Task::ATTACH));
-        targetPositions.push_back(Mission(storage_row, storage_col, whiteColorString, Task::DETACH));
+        targetPositions.push_back(Mission(storage_row+1, storage_col, whiteColorString, Task::DETACH));
     }
     
     // Prepare first trajectory
@@ -671,21 +685,22 @@ std::vector<std::pair<geometry_msgs::msg::Pose, Task>> RobotControlNode::getPose
     pose1.position.y = posY;
     pose1.position.z = zMoving;
     poses.push_back(std::make_pair(pose1, Task::NONE));
-
-    // Second pose: down at attach height
+// 
+    // // Second pose: down at attach height
     geometry_msgs::msg::Pose pose2;
     pose2.orientation = pose1.orientation;
     pose2.position.x = posX;
     pose2.position.y = posY;
     pose2.position.z = zAttach - 0.0107;
     poses.push_back(std::make_pair(pose2, Task::NONE));
-
-    // Third pose: back up to moving height
+// 
+    // // Third pose: back up to moving height
     geometry_msgs::msg::Pose pose3;
     pose3.orientation = pose1.orientation;
     pose3.position.x = posX;
     pose3.position.y = posY;
     pose3.position.z = zMoving;
+    // poses.push_back(std::make_pair(pose1, Task::NONE));
     poses.push_back(std::make_pair(pose3, mission.task));
 
     return poses;
@@ -718,6 +733,8 @@ std::tuple<float, float, float> RobotControlNode::getColorFromName(const std::st
 
 void RobotControlNode::createFakePieceWithColor(const std::string& object_id, int row, int col, 
                                                 const std::string& colorName) {
+    RCLCPP_INFO(this->get_logger(), "Creaing fake piece");\
+
     int objectIDLong = convertStringToInt(object_id);
     piecesInRviz[objectIDLong] = true;
 
@@ -768,6 +785,7 @@ void RobotControlNode::removeAllFakePieces() {
 }
 
 void RobotControlNode::removeFakePiece(const std::string& object_id) {
+    RCLCPP_INFO(this->get_logger(), "Removing fake piece");\
     int objectIDLong = convertStringToInt(object_id);
     visualization_msgs::msg::MarkerArray updated_marker_array;
 
@@ -787,6 +805,7 @@ void RobotControlNode::removeFakePiece(const std::string& object_id) {
 }
 
 void RobotControlNode::createPiece(int row, int col) {
+    RCLCPP_INFO(this->get_logger(), "Creating piece");\
     collision_object = moveit_msgs::msg::CollisionObject();
     collision_object.header.frame_id = "base_link";
     collision_object.id = "collisionObjectID";
@@ -815,6 +834,7 @@ void RobotControlNode::createPiece(int row, int col) {
 }
 
 void RobotControlNode::removePiece() {
+    RCLCPP_INFO(this->get_logger(), "Removing piece");\
     collision_object.operation = collision_object.REMOVE;
     moveit::planning_interface::PlanningSceneInterface planning_scene_interface;
     planning_scene_interface.applyCollisionObject(collision_object);
