@@ -113,7 +113,7 @@ void RobotControlNode::openGripper() {
     request->speed = 10;  // Faster gripper speed
     request->force = 5;
     auto result = gripperServiceClient->async_send_request(request);
-    std::this_thread::sleep_for(std::chrono::milliseconds(1500));  // Reduced from 3s to 1.5s
+    // std::this_thread::sleep_for(std::chrono::milliseconds(1500));  // Reduced from 3s to 1.5s
 }
 
 void RobotControlNode::closeGripper() {
@@ -123,7 +123,7 @@ void RobotControlNode::closeGripper() {
     request->speed = 10;  // Faster gripper speed
     request->force = 5;
     auto result = gripperServiceClient->async_send_request(request);
-    std::this_thread::sleep_for(std::chrono::milliseconds(1500));  // Reduced from 3s to 1.5s
+    // std::this_thread::sleep_for(std::chrono::milliseconds(1500));  // Reduced from 3s to 1.5s
 }
 
 bool RobotControlNode::moveToSafeApproachPosition() {
