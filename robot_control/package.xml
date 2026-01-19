@@ -27,6 +27,7 @@
     <depend>moveit_visual_tools</depend>
     <depend>rviz_visual_tools</depend>
     <depend>gripper_srv</depend>
+    <depend>leap_gesture_interface</depend>
 
     <!-- runtime deps for your launch -->
     <exec_depend>ros2launch</exec_depend>

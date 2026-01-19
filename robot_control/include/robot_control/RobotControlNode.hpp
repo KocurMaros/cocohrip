@@ -26,7 +26,12 @@
 #include "tf2_ros/buffer.h"
 #include "geometry_msgs/msg/point_stamped.hpp"
 #include <mutex>
+#include <atomic>
 #include <fstream>
+#include "leap_gesture_interface/msg/leap_hand.hpp"
+#include "leap_gesture_interface/msg/leap_finger.hpp"
+#include "leap_gesture_interface/msg/leap_palm.hpp"
+#include "leap_gesture_interface/msg/leap_frame.hpp"
 
 class RobotControlNode : public rclcpp::Node
 {
@@ -40,6 +45,7 @@ public:
     void move(geometry_msgs::msg::Pose targetPose);
     void moveInThread(geometry_msgs::msg::Pose targetPose);
     void stop();
+    void continue_move();
     void attachPiece();
     void detachPiece();
     void createPiece(int row, int col);
@@ -81,8 +87,8 @@ private:
     rclcpp::Subscription<checkers_msgs::msg::HandDetected>::SharedPtr handDetectedSub;
     void hand_detected_callback(const checkers_msgs::msg::HandDetected::SharedPtr msg);
 
-    rclcpp::Subscription<std_msgs::msg::String>::SharedPtr handDetectedLMSub;
-    void hand_detected_lm_callback(const std_msgs::msg::String::SharedPtr msg);
+    rclcpp::Subscription<leap_gesture_interface::msg::LeapFrame>::SharedPtr handDetectedLMSub;
+    void hand_detected_lm_callback(const leap_gesture_interface::msg::LeapFrame::SharedPtr msg);
     
     rclcpp::Subscription<rcl_interfaces::msg::Log>::SharedPtr rosOutSub;
     void ros_out_callback(const rcl_interfaces::msg::Log::SharedPtr msg);
@@ -115,6 +121,11 @@ private:
     float zAttach;          // Height for attaching pieces (min safe Z = 0.155m)
     float zMoving;          // Safe height for moving above board
     float zMoveOffset;      // Movement offset after placing / grasping a checker
+    float zSafeTransition;  // Safe transition height for movements between squares
+    
+    // Movement abort functionality
+    std::atomic<bool> abortCurrentMovement{false};
+    void abortAndClearMovement();
 
     visualization_msgs::msg::MarkerArray marker_array_fake_pieces;
     moveit_msgs::msg::CollisionObject collision_object;
