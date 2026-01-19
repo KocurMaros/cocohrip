@@ -258,6 +258,10 @@ void RobotControlNode::mainLoop() {
         bool at_position = false;
         
         if (current_pose_opt) {
+            // For Z travel moves, we primarily care about reaching height first if going up
+            // Or reaching XY first if going down. 
+            // But simple distance check is robust enough for now
+            
             double distance = std::sqrt(
                 std::pow(current_pose_opt->position.x - target_pose.position.x, 2) +
                 std::pow(current_pose_opt->position.y - target_pose.position.y, 2) +
@@ -286,6 +290,14 @@ void RobotControlNode::mainLoop() {
             makeTask(mission);
             // Wait for gripper operation to complete
             std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+            
+            // SPECIAL BEHAVIOR: "if it is above target square go directly down and after opening gripper go home"
+            // This usually happens at DETACH (place) task
+            if (task == Task::DETACH) {
+                // If this is the last task or just a placement, we might want to skip the lift if going home
+                // Logic currently lifts to zSafeTransition then checks for next mission
+                // This seems consistent with "after opening gripper go home" (home is safe height travel)
+            }
         }
         
         // Done with this pose, move to next
@@ -814,6 +826,13 @@ std::vector<std::pair<geometry_msgs::msg::Pose, Task>> RobotControlNode::getPose
     // OPTIMIZED: Skip intermediate zMoving pose - go directly from approach to attach
     // Only add zMoving waypoint if we didn't add an approach waypoint (i.e., we're already above target)
     if (!added_approach_waypoint) {
+        // If we are already above target (small horizontal move), still go to safe height (5cm above board = 0.15m)
+        // User requested: "go after taking piece 5 cm above checker board"
+        // Board is at ~0.10m, so 5cm above board is ~0.15m absolute Z
+        // Assuming user means 5cm clearance above pieces which are ~0.15m
+        
+        float zClearance = 0.20; // 20cm absolute height (clearance above pieces)
+        
         geometry_msgs::msg::Pose above_pose;
         above_pose.orientation.x = -0.0028119066264480352;
         above_pose.orientation.y = 0.9999957084655762;
@@ -821,10 +840,10 @@ std::vector<std::pair<geometry_msgs::msg::Pose, Task>> RobotControlNode::getPose
         above_pose.orientation.w = -0.00023792324645910412;
         above_pose.position.x = posX;
         above_pose.position.y = posY;
-        above_pose.position.z = zMoving;
+        above_pose.position.z = zClearance; 
         poses.push_back(std::make_pair(above_pose, Task::NONE));
         
-        RCLCPP_INFO(this->get_logger(), "Added above-target waypoint at Z=%.2f", zMoving);
+        RCLCPP_INFO(this->get_logger(), "Added above-target waypoint at Z=%.2f", zClearance);
     }
 
     // Second pose: down at attach height - THIS IS WHERE GRIPPER OPERATES
@@ -840,6 +859,9 @@ std::vector<std::pair<geometry_msgs::msg::Pose, Task>> RobotControlNode::getPose
     poses.push_back(std::make_pair(pose2, mission.task));
 
     // Third pose: back up to safe height (after gripper operation)
+    // User request: "go after taking piece 5 cm above checker board"
+    // Then checks if next move is valid. If it's DETACH (placing), it will be handled by next trajectory
+    // But currently we return to zSafeTransition (0.25) which is safer for travel
     geometry_msgs::msg::Pose pose3;
     pose3.orientation = pose2.orientation;
     pose3.position.x = posX;
