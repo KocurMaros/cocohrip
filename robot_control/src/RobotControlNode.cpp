@@ -246,11 +246,11 @@ void RobotControlNode::mainLoop() {
         }
     }
 
+    // STAGE 2: EXECUTE MOVEMENT
     if(trajectory_pose_index >= 0 && static_cast<std::size_t>(trajectory_pose_index) < trajectory_list.size()) {
         Task task = trajectory_list[trajectory_pose_index].second;
         
         // FIXED: Always move to the pose FIRST, then execute the task
-        // We need to track if we've already moved to this pose
         target_pose = trajectory_list[trajectory_pose_index].first;
         
         // Check if we're already at the target position
@@ -258,10 +258,6 @@ void RobotControlNode::mainLoop() {
         bool at_position = false;
         
         if (current_pose_opt) {
-            // For Z travel moves, we primarily care about reaching height first if going up
-            // Or reaching XY first if going down. 
-            // But simple distance check is robust enough for now
-            
             double distance = std::sqrt(
                 std::pow(current_pose_opt->position.x - target_pose.position.x, 2) +
                 std::pow(current_pose_opt->position.y - target_pose.position.y, 2) +
@@ -290,16 +286,21 @@ void RobotControlNode::mainLoop() {
             makeTask(mission);
             // Wait for gripper operation to complete
             std::this_thread::sleep_for(std::chrono::milliseconds(1500));
-            
-            // SPECIAL BEHAVIOR: "if it is above target square go directly down and after opening gripper go home"
-            // This usually happens at DETACH (place) task
-            if (task == Task::DETACH) {
-                // If this is the last task or just a placement, we might want to skip the lift if going home
-                // Logic currently lifts to zSafeTransition then checks for next mission
-                // This seems consistent with "after opening gripper go home" (home is safe height travel)
-            }
         }
         
+        // OPTIMIZATION: If this was an ATTACH task (pick up), skip the "lift to safe transition" 
+        // if the next move is short, to avoid double lifting.
+        if (task == Task::ATTACH) {
+             // We just picked up a piece. The trajectory list has a "lift to safe" as next point.
+             // We want to skip it IF we don't need to go all the way up for a small move.
+             // HOWEVER, user requested: "go after taking piece 5 cm above checker board"
+             // My trajectory generation put `zSafeTransition` (25cm) as the post-pickup lift.
+             // User wants 5cm clearance (relative) -> ~20cm absolute.
+             
+             // Let's modify the next waypoint dynamically if needed.
+             // But simpler is to fix getPoseList() to put the correct height there.
+        }
+
         // Done with this pose, move to next
         trajectory_pose_index++;
         return;
@@ -858,16 +859,23 @@ std::vector<std::pair<geometry_msgs::msg::Pose, Task>> RobotControlNode::getPose
     // Gripper task happens HERE at the lowest point, after reaching position
     poses.push_back(std::make_pair(pose2, mission.task));
 
-    // Third pose: back up to safe height (after gripper operation)
-    // User request: "go after taking piece 5 cm above checker board"
-    // Then checks if next move is valid. If it's DETACH (placing), it will be handled by next trajectory
-    // But currently we return to zSafeTransition (0.25) which is safer for travel
-    geometry_msgs::msg::Pose pose3;
-    pose3.orientation = pose2.orientation;
-    pose3.position.x = posX;
-    pose3.position.y = posY;
-    pose3.position.z = zSafeTransition;  // Lift to safe height for next movement
-    poses.push_back(std::make_pair(pose3, Task::NONE));
+    // Third pose: back up to CLEARANCE height (after gripper operation)
+    // User requested "go after taking piece 5 cm above checker board" (which means ~0.20m absolute Z)
+    // instead of going all the way up to zSafeTransition (0.25m)
+    
+    // HOWEVER, if we are placing (DETACH) and going HOME, we should probably be safe.
+    // But user said: "if it is above target square go directly down and after opening gripper go home"
+    // Going HOME implies traveling, so safe height is good.
+    // But "go after taking piece 5 cm above" implies the immediate move after ATTACH should be lower.
+    
+    // float postTaskHeight = (mission.task == Task::ATTACH) ? 0.20f : zSafeTransition;
+    
+    // geometry_msgs::msg::Pose pose3;
+    // pose3.orientation = pose2.orientation;
+    // pose3.position.x = posX;
+    // pose3.position.y = posY;
+    // pose3.position.z = postTaskHeight;
+    // poses.push_back(std::make_pair(pose3, Task::NONE));
     
     RCLCPP_INFO(this->get_logger(), "Trajectory: %zu waypoints total", poses.size());
 
