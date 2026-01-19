@@ -26,6 +26,7 @@
 #include "tf2_ros/buffer.h"
 #include "geometry_msgs/msg/point_stamped.hpp"
 #include <mutex>
+#include <atomic>
 #include <fstream>
 
 class RobotControlNode : public rclcpp::Node
@@ -115,6 +116,11 @@ private:
     float zAttach;          // Height for attaching pieces (min safe Z = 0.155m)
     float zMoving;          // Safe height for moving above board
     float zMoveOffset;      // Movement offset after placing / grasping a checker
+    float zSafeTransition;  // Safe transition height for movements between squares
+    
+    // Movement abort functionality
+    std::atomic<bool> abortCurrentMovement{false};
+    void abortAndClearMovement();
 
     visualization_msgs::msg::MarkerArray marker_array_fake_pieces;
     moveit_msgs::msg::CollisionObject collision_object;
