@@ -105,10 +105,10 @@ class CheckersNode(Node):
         print("\n" + "="*60)
         print("SYSTEM READY - Starting main game loop")
         print("="*60)
-        print("\n→ Press 'S' in any OpenCV window to START the game")
-        print("→ Press '1' for EASY, '2' for MEDIUM, '3' for HARD difficulty")
+        print("\n→ Set AI difficulty using the trackbar in calibration window")
+        print("→ Press SPACE to confirm calibration, then 'S' to START")
         print("→ Press SPACE during gameplay to force move validation")
-        print(f"\n→ Current difficulty: {self.difficulty.name} (depth={self.ai_depth})\n")
+        print(f"\n→ Default difficulty: {self.difficulty.name} (depth={self.ai_depth})\n")
         
         # Start background detection thread
         # NOTE: Detection thread only gets camera images, NOT OpenCV windows
@@ -244,6 +244,18 @@ class CheckersNode(Node):
     
     def _start_game(self):
         """Initialize and start the game"""
+        # Read difficulty from calibration if set
+        if hasattr(self.boardDetection, 'selected_difficulty'):
+            calibrated_depth = self.boardDetection.selected_difficulty
+            if calibrated_depth <= 1:
+                self.difficulty = Difficulty.EASY
+            elif calibrated_depth <= 3:
+                self.difficulty = Difficulty.MEDIUM
+            else:
+                self.difficulty = Difficulty.HARD
+            self.ai_depth = calibrated_depth
+            print(f"\n★ Using calibrated AI difficulty: {self.difficulty.name} (depth={self.ai_depth})")
+        
         self.game_started = True
         self.game_state = GameState.PLAYER_TURN
         print("\n" + "="*60)

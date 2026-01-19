@@ -110,20 +110,20 @@ void RobotControlNode::openGripper() {
     RCLCPP_INFO(this->get_logger(), "Opening gripper");
     auto request = std::make_shared<gripper_srv::srv::GripperService::Request>();
     request->position = 0;
-    request->speed = 5;
+    request->speed = 10;  // Faster gripper speed
     request->force = 5;
     auto result = gripperServiceClient->async_send_request(request);
-    std::this_thread::sleep_for(std::chrono::seconds(3));
+    std::this_thread::sleep_for(std::chrono::milliseconds(1500));  // Reduced from 3s to 1.5s
 }
 
 void RobotControlNode::closeGripper() {
     RCLCPP_INFO(this->get_logger(), "Closing gripper");
     auto request = std::make_shared<gripper_srv::srv::GripperService::Request>();
     request->position = 111;
-    request->speed = 5;
+    request->speed = 10;  // Faster gripper speed
     request->force = 5;
     auto result = gripperServiceClient->async_send_request(request);
-    std::this_thread::sleep_for(std::chrono::seconds(3));
+    std::this_thread::sleep_for(std::chrono::milliseconds(1500));  // Reduced from 3s to 1.5s
 }
 
 bool RobotControlNode::moveToSafeApproachPosition() {
@@ -214,15 +214,47 @@ void RobotControlNode::mainLoop() {
 
     if(trajectory_pose_index >= 0 && static_cast<std::size_t>(trajectory_pose_index) < trajectory_list.size()) {
         Task task = trajectory_list[trajectory_pose_index].second;
-        if(task != Task::NONE) {
-            Mission mission = targetPositions[target_pose_index];
-            makeTask(mission);  
+        
+        // FIXED: Always move to the pose FIRST, then execute the task
+        // We need to track if we've already moved to this pose
+        target_pose = trajectory_list[trajectory_pose_index].first;
+        
+        // Check if we're already at the target position
+        auto current_pose_opt = pose_utility_->getCurrentPose();
+        bool at_position = false;
+        
+        if (current_pose_opt) {
+            double distance = std::sqrt(
+                std::pow(current_pose_opt->position.x - target_pose.position.x, 2) +
+                std::pow(current_pose_opt->position.y - target_pose.position.y, 2) +
+                std::pow(current_pose_opt->position.z - target_pose.position.z, 2)
+            );
+            at_position = (distance < 0.02);  // 2cm threshold
+        }
+        
+        if (!at_position) {
+            // Haven't reached position yet - move there first
+            RCLCPP_INFO(this->get_logger(), 
+                       "Moving to position [%.4f, %.4f, %.4f] %s",
+                       target_pose.position.x, target_pose.position.y, target_pose.position.z,
+                       task != Task::NONE ? "(gripper action pending)" : "");
+            isRobotMoving = true;
+            moveInThread(target_pose);
             return;
         }
         
-        target_pose = trajectory_list[trajectory_pose_index].first;
-        isRobotMoving = true;
-        moveInThread(target_pose);
+        // We're at the position - now execute any pending task
+        if(task != Task::NONE) {
+            RCLCPP_INFO(this->get_logger(), 
+                       "At position - executing gripper task: %s",
+                       task == Task::ATTACH ? "CLOSE (pick)" : "OPEN (place)");
+            Mission mission = targetPositions[target_pose_index];
+            makeTask(mission);
+            // Wait for gripper operation to complete
+            std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+        }
+        
+        // Done with this pose, move to next
         trajectory_pose_index++;
         return;
     }
@@ -747,23 +779,23 @@ std::vector<std::pair<geometry_msgs::msg::Pose, Task>> RobotControlNode::getPose
     pose1.position.y = posY;
     pose1.position.z = zMoving;
     poses.push_back(std::make_pair(pose1, Task::NONE));
-// 
-    // // Second pose: down at attach height
+
+    // Second pose: down at attach height - THIS IS WHERE GRIPPER OPERATES
     geometry_msgs::msg::Pose pose2;
     pose2.orientation = pose1.orientation;
     pose2.position.x = posX;
     pose2.position.y = posY;
     pose2.position.z = zAttach - 0.0107;
-    poses.push_back(std::make_pair(pose2, Task::NONE));
-// 
-    // // Third pose: back up to moving height
+    // Gripper task happens HERE at the lowest point, after reaching position
+    poses.push_back(std::make_pair(pose2, mission.task));
+
+    // Third pose: back up to moving height (after gripper operation)
     geometry_msgs::msg::Pose pose3;
     pose3.orientation = pose1.orientation;
     pose3.position.x = posX;
     pose3.position.y = posY;
     pose3.position.z = zMoving;
-    // poses.push_back(std::make_pair(pose1, Task::NONE));
-    poses.push_back(std::make_pair(pose3, mission.task));
+    poses.push_back(std::make_pair(pose3, Task::NONE));
 
     return poses;
 }

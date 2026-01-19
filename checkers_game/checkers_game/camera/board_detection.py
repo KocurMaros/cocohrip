@@ -27,6 +27,9 @@ class BoardDetection:
         self.empty_variance_threshold = 500  # Empty squares have low variance ~200-500
         self.black_variance_threshold = 1000  # Black pieces ~700-900, White pieces >1100
         
+        # Initialize selected difficulty (will be set during calibration)
+        self.selected_difficulty = 3  # Default: MEDIUM
+        
         # Add flags to track initialization state
         self.is_initialized = False
         self.trackbars_created = False
@@ -424,7 +427,7 @@ class BoardDetection:
         
         if createTrackBars:
             print("\n" + "="*60)
-            print("STEP 3: SQUARE CLASSIFICATION (EMPTY/BLACK/WHITE)")
+            print("STEP 3: SQUARE CLASSIFICATION & AI DIFFICULTY")
             print("="*60)
             print("\nAdjust the 2 variance thresholds to classify all 64 squares:")
             print("  • Empty squares: variance BELOW 'empty_variance'")
@@ -435,6 +438,10 @@ class BoardDetection:
             print("  Empty squares: variance ~200-500")
             print("  Black pieces: variance ~700-900")
             print("  White pieces: variance >1100")
+            print("\n★ AI DIFFICULTY (use 'difficulty' slider):")
+            print("  1 = EASY   (fast, makes mistakes)")
+            print("  3 = MEDIUM (balanced)")
+            print("  5 = HARD   (slow, very challenging)")
             print("\n→ Adjust trackbars in 'Square_Classification' window")
             print("→ Press SPACE when you see correct counts")
             print("-"*60)
@@ -443,6 +450,10 @@ class BoardDetection:
             cv2.createTrackbar('empty_variance', 'Square_Classification', 600, 2200, self._nothing)
             cv2.createTrackbar('black_variance', 'Square_Classification', 1000, 2200, self._nothing)
             cv2.createTrackbar('show_values', 'Square_Classification', 1, 1, self._nothing)
+            # AI Difficulty trackbar: 1=Easy, 3=Medium, 5=Hard
+            cv2.createTrackbar('AI_difficulty', 'Square_Classification', 3, 5, self._nothing)
+            # Initialize difficulty storage
+            self.selected_difficulty = 3  # Default: Medium
 
         # INITIALIZATION MODE - Wait loop for user to adjust and confirm
         while createTrackBars:
@@ -455,6 +466,10 @@ class BoardDetection:
             empty_variance = cv2.getTrackbarPos('empty_variance', 'Square_Classification')
             black_variance = cv2.getTrackbarPos('black_variance', 'Square_Classification')
             show_values = cv2.getTrackbarPos('show_values', 'Square_Classification')
+            
+            # Get AI difficulty (ensure minimum of 1)
+            ai_difficulty = max(1, cv2.getTrackbarPos('AI_difficulty', 'Square_Classification'))
+            self.selected_difficulty = ai_difficulty
             
             # Get the dimensions of each square
             h, w = current_image.shape[:2]
@@ -636,6 +651,30 @@ class BoardDetection:
             cv2.line(info_panel, (20, y_pos), (380, y_pos), (100, 100, 100), 2)
             y_pos += 40
             
+            # AI Difficulty section
+            cv2.putText(info_panel, "AI DIFFICULTY", (20, y_pos), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            y_pos += 40
+            
+            # Display difficulty name based on value
+            if ai_difficulty <= 1:
+                diff_name = "EASY"
+                diff_color = (0, 255, 0)  # Green
+            elif ai_difficulty <= 3:
+                diff_name = "MEDIUM"
+                diff_color = (0, 255, 255)  # Yellow
+            else:
+                diff_name = "HARD"
+                diff_color = (0, 0, 255)  # Red
+            
+            cv2.putText(info_panel, f"Level: {ai_difficulty} ({diff_name})", (30, y_pos), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, diff_color, 2)
+            y_pos += 50
+            
+            # Separator
+            cv2.line(info_panel, (20, y_pos), (380, y_pos), (100, 100, 100), 2)
+            y_pos += 40
+            
             # Status message
             if is_correct:
                 status_text = "PERFECT!"
@@ -662,20 +701,33 @@ class BoardDetection:
             key = cv2.waitKey(30) & 0xFF
             
             if key == 32:  # SPACE pressed
+                # Get difficulty name for display
+                if ai_difficulty <= 1:
+                    diff_name = "EASY"
+                elif ai_difficulty <= 3:
+                    diff_name = "MEDIUM"
+                else:
+                    diff_name = "HARD"
+                    
                 if is_correct:
                     print(f"\n✓ Perfect classification achieved!")
                     print(f"  Empty: {num_empty}, Black: {num_black}, White: {num_white}")
                     print(f"  Variance range: {min_var} - {max_var} (avg: {avg_var})")
                     print(f"  Thresholds: Empty<{empty_variance}<Black<{black_variance}<White")
+                    print(f"  ★ AI Difficulty: {diff_name} (depth={ai_difficulty})")
                     print("  → Initialization complete, press 'S' to start game!\n")
                 else:
                     print(f"\n⚠ Warning: Not perfect but continuing...")
                     print(f"  Empty: {num_empty}/{self.numberOfEmptyFields}, Black: {num_black}/12, White: {num_white}/12")
                     print(f"  Variance range: {min_var} - {max_var} (avg: {avg_var})")
+                    print(f"  ★ AI Difficulty: {diff_name} (depth={ai_difficulty})")
                 
                 # Store thresholds for runtime use
                 self.empty_variance_threshold = empty_variance
                 self.black_variance_threshold = black_variance
+                
+                # Store selected difficulty for checkers_node to read
+                self.selected_difficulty = ai_difficulty
                 
                 # Close info window
                 cv2.destroyWindow("Classification_Info")
