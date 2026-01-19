@@ -65,7 +65,8 @@ RobotControlNode::RobotControlNode()
     
     // Z heights
     zAttach = 0.155;  // End effector offset - minimum safe height
-    zMoving = 0.15;   // Safe moving height above board
+    zMoving = 0.20;   // Safe moving height above board (raised to 20cm to avoid hitting pieces)
+    zSafeTransition = 0.25;  // Safe transition height for movements between squares (25cm)
     
     RCLCPP_INFO(this->get_logger(), "Board calibration:");
     RCLCPP_INFO(this->get_logger(), "  Calculated square size: %.4f m", square_size);
@@ -93,8 +94,8 @@ void RobotControlNode::initMoveGroup() {
         return;
     }
 
-    pose_utility_->setVelocityScaling(1);
-    pose_utility_->setAccelerationScaling(0.04);
+    pose_utility_->setVelocityScaling(0.8);  // Faster movement speed (80%)
+    pose_utility_->setAccelerationScaling(0.3);  // Much faster acceleration
 
     RCLCPP_INFO(this->get_logger(), "RobotPoseUtility initialized successfully");
 
@@ -124,12 +125,12 @@ void RobotControlNode::closeGripper() {
 }
 
 bool RobotControlNode::moveToSafeApproachPosition() {
-    RCLCPP_INFO(this->get_logger(), "Moving to safe approach position above chessboard center...");
+    RCLCPP_INFO(this->get_logger(), "Moving to safe approach position 20cm above chessboard center...");
     
     // Calculate center of chessboard
     float center_x = boardOffsetX + (3.5 * square_size);  // Middle of 8x8 board
     float center_y = boardOffsetY + (3.5 * square_size);
-    float approach_z = 0.35;  // Safe height above board
+    float approach_z = 0.30;  // 20cm above board surface (board at ~0.10m)
     
     geometry_msgs::msg::Pose approach_pose;
     approach_pose.orientation.x = -0.0028119066264480352;
@@ -551,6 +552,31 @@ void RobotControlNode::hand_detected_lm_callback(const std_msgs::msg::String::Sh
     // Implementation if needed
 }
 
+void RobotControlNode::abortAndClearMovement() {
+    RCLCPP_WARN(this->get_logger(), "⚠️ ABORTING current movement for new request!");
+    
+    // Signal abort
+    abortCurrentMovement.store(true);
+    
+    // Stop current movement via MoveIt
+    if (pose_utility_ && pose_utility_->isInitialized()) {
+        // MoveGroup stop will be handled by the abort flag
+    }
+    
+    // Wait for movement thread to finish
+    if (moveThread && moveThread->joinable()) {
+        moveThread->join();
+    }
+    
+    // Clear state
+    isRobotMoving = false;
+    isStop = false;
+    doingTask = false;
+    abortCurrentMovement.store(false);
+    
+    RCLCPP_INFO(this->get_logger(), "✅ Previous movement aborted, ready for new command");
+}
+
 void RobotControlNode::checkers_move_callback(const checkers_msgs::msg::Move::SharedPtr msg) {
     // Add safety check at the start
     if (!msg) {
@@ -558,11 +584,16 @@ void RobotControlNode::checkers_move_callback(const checkers_msgs::msg::Move::Sh
         return;
     }
     
+    // ABORT current movement if robot is moving
+    if (isRobotMoving || !targetPositions.empty()) {
+        abortAndClearMovement();
+    }
+    
     // Clear existing data safely
     targetPositions.clear();
-    trajectory_list.clear();  // Add this line - was missing!
+    trajectory_list.clear();
     target_pose_index = -1;
-    trajectory_pose_index = 0;  // Reset this too
+    trajectory_pose_index = 0;
 
     auto [startRow, startCol] = rotate90DegreesCounterClockwise(msg->piece_for_moving.row, msg->piece_for_moving.col);
     
@@ -589,14 +620,20 @@ void RobotControlNode::checkers_move_callback(const checkers_msgs::msg::Move::Sh
     for (const auto& piece : msg->removed_pieces) {
         auto [row, col] = rotate90DegreesCounterClockwise(piece.row, piece.col);
         
-        int storage_row = 8 + (removedPiecesCount / 3);
-        int storage_col = removedPiecesCount % 3;
+        // Fixed: Create columns of 4 pieces each on the side
+        // Column 0: pieces 0-3, Column 1: pieces 4-7, Column 2: pieces 8-11
+        int storage_col = removedPiecesCount / 4;  // New column every 4 pieces
+        int storage_row = 8 + (removedPiecesCount % 4);  // Row within column (0-3)
         
-        // Add bounds checking for storage positions
-        if (storage_row > 12 || storage_col > 2) {
+        // Add bounds checking for storage positions (max 3 columns of 4 pieces = 12 pieces)
+        if (storage_col > 2) {
             RCLCPP_ERROR(this->get_logger(), "Storage area full! Cannot store more pieces.");
             continue;
         }
+        
+        RCLCPP_INFO(this->get_logger(), 
+                   "Storage calculation: piece #%d -> column %d, row offset %d", 
+                   removedPiecesCount, storage_col, storage_row - 8);
         
         removedPiecesCount++;
         
@@ -658,20 +695,35 @@ std::vector<std::pair<geometry_msgs::msg::Pose, Task>> RobotControlNode::getPose
                    current_pose_opt->position.x, current_pose_opt->position.y,
                    posX, posY, horizontal_distance);
         
-        // If moving more than 30cm horizontally, add high waypoint for safety
-        if (horizontal_distance > 0.30) {
-            geometry_msgs::msg::Pose high_waypoint;
-            high_waypoint.orientation.x = -0.0028119066264480352;
-            high_waypoint.orientation.y = 0.9999957084655762;
-            high_waypoint.orientation.z = -0.0007648332393728197;
-            high_waypoint.orientation.w = -0.00023792324645910412;
-            high_waypoint.position.x = posX;
-            high_waypoint.position.y = posY;
-            high_waypoint.position.z = 0.35;  // Safe height for long movements
-            poses.push_back(std::make_pair(high_waypoint, Task::NONE));
+        // For any movement, first lift to safe transition height (25cm) to avoid pieces
+        if (current_pose_opt->position.z < zSafeTransition) {
+            geometry_msgs::msg::Pose lift_pose;
+            lift_pose.orientation.x = -0.0028119066264480352;
+            lift_pose.orientation.y = 0.9999957084655762;
+            lift_pose.orientation.z = -0.0007648332393728197;
+            lift_pose.orientation.w = -0.00023792324645910412;
+            lift_pose.position.x = current_pose_opt->position.x;
+            lift_pose.position.y = current_pose_opt->position.y;
+            lift_pose.position.z = zSafeTransition;  // Lift to 25cm first
+            poses.push_back(std::make_pair(lift_pose, Task::NONE));
+            
+            RCLCPP_INFO(this->get_logger(), "Added lift waypoint to Z=%.2f", zSafeTransition);
+        }
+        
+        // If moving more than 15cm horizontally, add intermediate waypoint at safe height
+        if (horizontal_distance > 0.15) {
+            geometry_msgs::msg::Pose travel_waypoint;
+            travel_waypoint.orientation.x = -0.0028119066264480352;
+            travel_waypoint.orientation.y = 0.9999957084655762;
+            travel_waypoint.orientation.z = -0.0007648332393728197;
+            travel_waypoint.orientation.w = -0.00023792324645910412;
+            travel_waypoint.position.x = posX;
+            travel_waypoint.position.y = posY;
+            travel_waypoint.position.z = zSafeTransition;  // Travel at 25cm height
+            poses.push_back(std::make_pair(travel_waypoint, Task::NONE));
             
             RCLCPP_INFO(this->get_logger(), 
-                       "Added high waypoint at Z=0.35 (distance: %.2f m)", horizontal_distance);
+                       "Added travel waypoint at Z=%.2f (distance: %.2f m)", zSafeTransition, horizontal_distance);
         }
     }
 

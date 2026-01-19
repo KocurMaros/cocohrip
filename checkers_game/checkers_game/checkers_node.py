@@ -10,11 +10,31 @@ from checkers_game.minimax.algorithm import WHITE, minimax
 import mediapipe as mp
 import time
 import numpy as np
+import threading
+from enum import Enum, auto
 
 from checkers_msgs.msg import Board, Piece, Move, HandDetected, RobotMove
 
 import rclpy
 from rclpy.node import Node
+
+
+class Difficulty(Enum):
+    """AI difficulty levels"""
+    EASY = 1      # Depth 1 - Very simple, makes mistakes
+    MEDIUM = 3    # Depth 3 - Balanced gameplay
+    HARD = 5      # Depth 5 - Very challenging
+
+
+class GameState(Enum):
+    """Game state machine states"""
+    WAITING_FOR_START = auto()
+    PLAYER_TURN = auto()
+    DETECTING_PLAYER_MOVE = auto()
+    VALIDATING_PLAYER_MOVE = auto()
+    AI_THINKING = auto()
+    ROBOT_MOVING = auto()
+    WAITING_FOR_ROBOT = auto()
 
 
 class CheckersNode(Node):
@@ -43,199 +63,409 @@ class CheckersNode(Node):
         self.mp_hands = mp.solutions.hands
         self.hands = self.mp_hands.Hands()
         self.mp_drawing = mp.solutions.drawing_utils
-        self.wait = False
+        
+        # State machine
+        self.game_state = GameState.WAITING_FOR_START
+        self.game_started = False
+        
+        # Robot synchronization - using locks for thread safety
+        self.robot_lock = threading.Lock()
         self.isRobotMoveDone = True
+        self.waiting_for_robot = False
+        self.pending_player_move = False  # Flag if player moved during robot turn
+        
+        # Detection state with threading
+        self.detection_lock = threading.Lock()
+        self.latest_board_detection = None
+        self.latest_camera_image = None
+        self.detection_thread_running = True
+        
+        # Movement detection
+        self.movement_detected = False
+        self.movement_stable_time = None
+        self.STABILITY_THRESHOLD = 0.8  # Reduced from 1.0 for faster response
+        
+        # AI Difficulty setting
+        self.difficulty = Difficulty.MEDIUM  # Default difficulty
+        self.ai_depth = self.difficulty.value
+        
+        # Hand detection cooldown to prevent false positives
+        self.last_hand_detected_time = 0
+        self.HAND_COOLDOWN = 0.5  # 500ms cooldown after hand leaves
 
+        # Publishers and subscribers
         self.board_publisher = self.create_publisher(Board, 'board_topic', 10)
         self.move_publisher = self.create_publisher(Move, 'move_topic', 10)
         self.hand_detected_publisher = self.create_publisher(HandDetected, 'hand_detected', 10)
-        self.robot_move_subscription = self.create_subscription(RobotMove, '/robot_move_topic', self.robot_move_callback, 10)
+        self.robot_move_subscription = self.create_subscription(
+            RobotMove, '/robot_move_topic', self.robot_move_callback, 10)
 
         self.oldCameraImage = self.ximeaCamera.get_camera_image()
-        self.waiting_for_true = True
-        self.last_false_time = None
-        self.isPlayerMoveDone = False
-        self.game_started = False  # Add flag for manual game start
-
+        
         print("\n" + "="*60)
         print("SYSTEM READY - Starting main game loop")
         print("="*60)
         print("\n→ Press 'S' in any OpenCV window to START the game")
-        print("→ Press SPACE during gameplay to force move validation\n")
+        print("→ Press '1' for EASY, '2' for MEDIUM, '3' for HARD difficulty")
+        print("→ Press SPACE during gameplay to force move validation")
+        print(f"\n→ Current difficulty: {self.difficulty.name} (depth={self.ai_depth})\n")
+        
+        # Start background detection thread
+        self.detection_thread = threading.Thread(target=self._detection_loop, daemon=True)
+        self.detection_thread.start()
         
         # Create a ROS2 timer to handle pygame events every 1/FPS seconds
         self.timer = self.create_timer(1/self.FPS, self.update_pygame)
 
+    def _detection_loop(self):
+        """Background thread for continuous board detection"""
+        while self.detection_thread_running:
+            try:
+                # Get camera image
+                camera_image = self.ximeaCamera.get_camera_image()
+                
+                # Run detection if game is initialized
+                if self.game.board.isBoardCreated:
+                    board_detected = self.boardDetection.get_board(camera_image, self.game)
+                    
+                    with self.detection_lock:
+                        self.latest_camera_image = camera_image
+                        self.latest_board_detection = board_detected
+                else:
+                    with self.detection_lock:
+                        self.latest_camera_image = camera_image
+                
+                # Small sleep to prevent CPU overload
+                time.sleep(0.03)  # ~33Hz detection rate
+                
+            except Exception as e:
+                self.get_logger().error(f"Detection thread error: {e}")
+                time.sleep(0.1)
+    
+    def get_latest_detection(self):
+        """Thread-safe getter for latest detection results"""
+        with self.detection_lock:
+            return self.latest_camera_image, self.latest_board_detection
 
     def robot_move_callback(self, msg):
-        print("\n✓ Robot finished its move")
-        self.isRobotMoveDone = msg.robot_move_done
+        """Callback when robot finishes its move"""
+        with self.robot_lock:
+            self.isRobotMoveDone = msg.robot_move_done
+            
+        if msg.robot_move_done:
+            print("\n" + "="*60)
+            print("✓ ROBOT FINISHED - Your turn!")
+            print("="*60)
+            
+            # Check if player already made a move during robot turn
+            if self.pending_player_move:
+                print("→ Player move was detected during robot turn, validating now...")
+                self.pending_player_move = False
+                self._force_validate_move()
+            else:
+                print("→ Make your move on the board")
+                print("→ Remove your hand and wait for detection\n")
+            
+            self.game_state = GameState.PLAYER_TURN
+            self.waiting_for_robot = False
+            self.movement_detected = False
+            self.movement_stable_time = None
+    
+    def set_difficulty(self, difficulty: Difficulty):
+        """Set AI difficulty level"""
+        self.difficulty = difficulty
+        self.ai_depth = difficulty.value
+        print(f"\n★ Difficulty set to: {difficulty.name} (search depth={self.ai_depth})")
+    
+    def _force_validate_move(self):
+        """Force immediate move validation"""
+        cameraImage, boardDetected = self.get_latest_detection()
+        if boardDetected is not None:
+            self._validate_and_process_move(boardDetected)
 
     def update_pygame(self):
-        # This is your game's main loop controlled by ROS2 timer
-        if pygame.event.get(pygame.QUIT):
-            self.destroy_node()
-            pygame.quit()
-            return
+        """Main game loop controlled by ROS2 timer"""
+        # Handle pygame quit
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                self.detection_thread_running = False
+                self.destroy_node()
+                pygame.quit()
+                return
 
         self.clock.tick(self.FPS)
-        cameraImage = self.ximeaCamera.get_camera_image()
+        
+        # Get latest detection from background thread
+        cameraImage, boardDetected = self.get_latest_detection()
+        
+        if cameraImage is None:
+            return
+            
+        # Get board coordinates and check for hand
         board_coordinates = self.get_board_coordinates()
         isHandDetected = self.detect_hand(cameraImage, board_coordinates)
-        boardDetected = self.boardDetection.get_board(cameraImage, self.game)
 
         if isHandDetected:
+            self.last_hand_detected_time = time.time()
             self.publish_hand_detected_state()
 
         # Check for key presses
         key = cv2.waitKey(1) & 0xFF
         
+        # Difficulty selection (1, 2, 3)
+        if key == ord('1'):
+            self.set_difficulty(Difficulty.EASY)
+        elif key == ord('2'):
+            self.set_difficulty(Difficulty.MEDIUM)
+        elif key == ord('3'):
+            self.set_difficulty(Difficulty.HARD)
+        
         # Press 'S' to start the game
         if key == ord('s') or key == ord('S'):
             if not self.game_started:
-                self.game_started = True
-                print("\n" + "="*60)
-                print("GAME STARTED - Make your first move!")
-                print("="*60)
-                print("\nYOU ARE WHITE (bottom 3 rows)")
-                print("You can move WHITE pieces diagonally forward")
-                print("\nValid starting positions for WHITE:")
-                print("  Row 5: positions 40, 41, 42, 43")
-                print("  Row 6: positions 48, 49, 50, 51")
-                print("  Row 7: positions 56, 57, 58, 59")
-                print("\nEach piece can move diagonally forward to an empty square")
-                print("Example: Piece at position 40 → can move to position 32 or 33")
-                print("\n→ Move a piece, then remove your hand completely")
-                print("→ Wait for board to stabilize (1 second)")
-                print("="*60 + "\n")
-                self.waiting_for_true = True
-                self.last_false_time = None
+                self._start_game()
         
         # Press SPACE to force move validation
         if key == 32:
             print("\n[SPACE pressed] Forcing move validation...")
-            self.wait = False
-            self.isPlayerMoveDone = True  # Force validation
+            self._force_validate_move()
         
         # Only process game logic if game has started
         if not self.game_started:
             return
+        
+        # State machine processing
+        self._process_game_state(cameraImage, boardDetected, isHandDetected)
+    
+    def _start_game(self):
+        """Initialize and start the game"""
+        self.game_started = True
+        self.game_state = GameState.PLAYER_TURN
+        print("\n" + "="*60)
+        print("GAME STARTED - Make your first move!")
+        print("="*60)
+        print(f"\nDifficulty: {self.difficulty.name} (AI depth={self.ai_depth})")
+        print("\nYOU ARE WHITE (bottom 3 rows)")
+        print("You can move WHITE pieces diagonally forward")
+        print("\nValid starting positions for WHITE:")
+        print("  Row 5: positions 40, 41, 42, 43")
+        print("  Row 6: positions 48, 49, 50, 51")
+        print("  Row 7: positions 56, 57, 58, 59")
+        print("\nEach piece can move diagonally forward to an empty square")
+        print("Example: Piece at position 40 → can move to position 32 or 33")
+        print("\n→ Move a piece, then remove your hand completely")
+        print("→ Wait for board to stabilize (0.8 seconds)")
+        print("="*60 + "\n")
+    
+    def _process_game_state(self, cameraImage, boardDetected, isHandDetected):
+        """Process game based on current state"""
+        
+        # Check for winner
+        if self.game.winner() is not None:
+            print("\n" + "="*60)
+            print(f"GAME OVER - Winner: {self.game.winner()}")
+            print("="*60 + "\n")
+            return
+        
+        # Get robot status safely
+        with self.robot_lock:
+            robot_done = self.isRobotMoveDone
+        
+        # Handle different states
+        if self.game_state == GameState.WAITING_FOR_ROBOT:
+            # Waiting for robot to complete its move
+            if not robot_done:
+                # Check if player is trying to move during robot turn
+                if not isHandDetected and self._detect_board_change(cameraImage):
+                    print("⚠ Movement detected during robot turn - will validate after robot finishes")
+                    self.pending_player_move = True
+            return
+        
+        if self.game_state == GameState.AI_THINKING:
+            # AI is calculating - this state transitions automatically
+            return
+        
+        if self.game_state == GameState.PLAYER_TURN:
+            if boardDetected is None:
+                return
+                
+            # Wait for hand cooldown
+            if time.time() - self.last_hand_detected_time < self.HAND_COOLDOWN:
+                return
             
-        isChange = self.findDifference(cameraImage, self.oldCameraImage)
+            # Detect if there's movement on the board
+            isChange = self._detect_board_change(cameraImage)
+            
+            if isChange and not isHandDetected:
+                # Movement detected without hand - start stability timer
+                if not self.movement_detected:
+                    self.movement_detected = True
+                    self.movement_stable_time = time.time()
+                    print("\n→ Movement detected on board, waiting for stabilization...")
+                    self._print_detection_summary(boardDetected)
+                else:
+                    # Reset timer if movement continues
+                    self.movement_stable_time = time.time()
+            elif not isChange and self.movement_detected:
+                # No change detected - check if stable long enough
+                if self.movement_stable_time and \
+                   time.time() - self.movement_stable_time > self.STABILITY_THRESHOLD:
+                    print("✓ Board stable - validating move...")
+                    self._validate_and_process_move(boardDetected)
+                    self.movement_detected = False
+                    self.movement_stable_time = None
+            elif isHandDetected:
+                # Hand detected - reset movement detection
+                if self.movement_detected:
+                    print("  Hand detected - resetting stability timer")
+                self.movement_detected = False
+                self.movement_stable_time = None
+        
+        # Update the old camera image for next comparison
         self.oldCameraImage = cameraImage
-
-        if self.isRobotMoveDone:
-            if self.waiting_for_true:
-                if isChange:
-                    self.waiting_for_true = False
-                    print("\n→ Movement detected on board, waiting for it to stabilize...")
-                    
-                    # Show what's currently on the board in real-time
-                    black_count = np.count_nonzero(boardDetected == 2)
-                    white_count = np.count_nonzero(boardDetected == 1)
-                    empty_count = np.count_nonzero(boardDetected == 0)
-                    print(f"  Current detection: Black={black_count}, White={white_count}, Empty={empty_count}")
+    
+    def _detect_board_change(self, newCameraImage):
+        """Detect if there's significant change on the board"""
+        if self.oldCameraImage is None:
+            return False
+            
+        diff = cv2.absdiff(newCameraImage, self.oldCameraImage)
+        _, thresh = cv2.threshold(diff, 30, 255, cv2.THRESH_BINARY)
+        
+        kernel = np.ones((5,5), np.uint8)
+        thresh = cv2.dilate(thresh, kernel, iterations=1)
+        
+        if len(thresh.shape) == 3:
+            thresh = cv2.cvtColor(thresh, cv2.COLOR_BGR2GRAY)
+        
+        change_percentage = np.sum(thresh == 255) / thresh.size * 100
+        significant_change_threshold = 2.0
+        
+        # Display the difference image
+        message = f"Change: {change_percentage:.1f}%" if change_percentage > significant_change_threshold else f"Stable: {change_percentage:.1f}%"
+        cv2.putText(thresh, message, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+        cv2.imshow('Difference', thresh)
+        
+        return change_percentage > significant_change_threshold
+    
+    def _print_detection_summary(self, boardDetected):
+        """Print current detection summary"""
+        if boardDetected is None:
+            return
+        black_count = np.count_nonzero(boardDetected == 2)
+        white_count = np.count_nonzero(boardDetected == 1)
+        print(f"  Current detection: Black={black_count}, White={white_count}")
+    
+    def _validate_and_process_move(self, boardDetected):
+        """Validate player's move and process AI response"""
+        print("\n→ Validating move against game rules...")
+        is_valid = self.game.wasItValidMove(boardDetected)
+        
+        if is_valid:
+            print("✓ Valid move detected!")
+            self.game.update(boardDetected)
+            self.publish_board_state()
+            
+            # Check if it's AI's turn (BLACK)
+            if self.game.board.isBoardCreated and self.game.turn == BLACK:
+                self._execute_ai_turn()
             else:
-                if isChange:
-                    # Reset the last_false_time if movement detected again
-                    if self.last_false_time is not None:
-                        print("  Movement resumed, restarting timer...")
-                    self.last_false_time = None
+                print("\n→ Your move complete! Waiting for next move...\n")
+                self.game_state = GameState.PLAYER_TURN
+        else:
+            self._handle_invalid_move(boardDetected)
+    
+    def _execute_ai_turn(self):
+        """Execute AI's turn with current difficulty"""
+        self.game_state = GameState.AI_THINKING
+        print("\n" + "-"*60)
+        print(f"AI's turn - Calculating best move (depth={self.ai_depth}, {self.difficulty.name})...")
+        
+        try:
+            # Run minimax with current difficulty depth
+            value, new_board, new_move, new_piece, removed = minimax(
+                self.game.get_board(), 
+                self.ai_depth, 
+                BLACK, 
+                self
+            )
+            
+            if new_move is None or new_piece is None:
+                print("⚠ AI couldn't find a valid move!")
+                self.game_state = GameState.PLAYER_TURN
+                return
+            
+            print(f"✓ AI decided to move from ({new_piece.row},{new_piece.col}) to {new_move}")
+            
+            self.aiMove = new_move
+            self.aiPiece = new_piece
+            self.aiPiece.color = BLACK
+            self.game.update(new_board.board)
+            
+            # Publish move to robot
+            self.publish_move_state(new_move, new_piece, removed)
+            
+            # Update state to waiting for robot
+            with self.robot_lock:
+                self.isRobotMoveDone = False
+            self.game_state = GameState.WAITING_FOR_ROBOT
+            self.waiting_for_robot = True
+            
+            print("Waiting for robot to execute move...")
+            print("-"*60 + "\n")
+            
+        except Exception as e:
+            self.get_logger().error(f"AI error: {e}")
+            print(f"⚠ AI error: {e}")
+            self.game_state = GameState.PLAYER_TURN
+    
+    def _handle_invalid_move(self, boardDetected):
+        """Handle invalid move detection"""
+        black_count = np.count_nonzero(boardDetected == 2)
+        white_count = np.count_nonzero(boardDetected == 1)
+        
+        print("\n" + "="*60)
+        print("✗ INVALID MOVE - Move rejected")
+        print("="*60)
+        print(f"  Detected pieces: Black={black_count}, White={white_count}")
+        print(f"  Current turn: {'WHITE (you)' if self.game.turn == WHITE else 'BLACK (AI)'}")
+        
+        self._analyze_board_changes(boardDetected)
+        
+        if self.game.turn == WHITE:
+            self._print_valid_moves()
+        
+        print("="*60 + "\n")
+        
+        # Stay in player turn state
+        self.game_state = GameState.PLAYER_TURN
+    
+    def _print_valid_moves(self):
+        """Print all valid moves for the current player"""
+        print("\n  YOUR TURN - Move a WHITE piece:")
+        try:
+            white_pieces = self.game.board.get_all_pieces_by_color(WHITE)
+            
+            if white_pieces and len(white_pieces) > 0:
+                movable_pieces = []
+                for piece in white_pieces:
+                    valid_moves = self.game.board.get_valid_moves(piece)
+                    if valid_moves and len(valid_moves) > 0:
+                        movable_pieces.append((piece, valid_moves))
+                
+                if len(movable_pieces) > 0:
+                    print(f"  You have {len(movable_pieces)} WHITE pieces that can move:")
+                    for piece, moves in movable_pieces:
+                        row, col = piece.row, piece.col
+                        position = row * 8 + col
+                        move_positions = [move[0] * 8 + move[1] for move in moves.keys()]
+                        print(f"    • Piece at position {position} (row {row}, col {col}) → can move to: {move_positions}")
                 else:
-                    if self.last_false_time is None:
-                        self.last_false_time = time.time()
-                        print("  Board stable, starting 1-second confirmation timer...")
-                        
-                        # Show current board state while waiting
-                        black_count = np.count_nonzero(boardDetected == 2)
-                        white_count = np.count_nonzero(boardDetected == 1)
-                        empty_count = np.count_nonzero(boardDetected == 0)
-                        print(f"  Current detection: Black={black_count}, White={white_count}, Empty={empty_count}")
-                        
-                    elif time.time() - self.last_false_time > 1:
-                        print("✓ Board stable for 1 second, validating move...")
-                        self.isPlayerMoveDone = True
-                        self.last_false_time = None
-                        self.waiting_for_true = True
-                
-            if self.isPlayerMoveDone or not self.wait:
-                if self.game.winner() is not None:
-                    print("\n" + "="*60)
-                    print(f"GAME OVER - Winner: {self.game.winner()}")
-                    print("="*60 + "\n")
-                
-                # Validate the move
-                print("\n→ Validating move against game rules...")
-                is_valid = self.game.wasItValidMove(boardDetected)
-                
-                if is_valid:
-                    print("✓ Valid move detected!")
-                    self.game.update(boardDetected)
-                    self.publish_board_state()
-                    
-                    if self.game.board.isBoardCreated == True and self.game.turn == BLACK and self.game.aiMove == None:
-                        print("\n" + "-"*60)
-                        print("AI's turn - Calculating best move (depth 3)...")
-                        value, new_board, new_move, new_piece, removed = minimax(self.game.get_board(), 3, BLACK, self)
-                        print(f"✓ AI decided to move from ({new_piece.row},{new_piece.col}) to {new_move}")
-                        self.aiMove = new_move
-                        self.aiPiece = new_piece
-                        self.aiPiece.color = BLACK
-                        self.game.update(new_board.board)
-                        self.publish_move_state(new_move, new_piece, removed)
-                        self.isRobotMoveDone = False
-                        print("Waiting for robot to execute move...")
-                        print("-"*60 + "\n")
-                    else:
-                        print("\n→ Your move complete! Waiting for next move...\n")
-                else:
-                    # Count pieces properly for numpy array
-                    black_count = np.count_nonzero(boardDetected == 2)
-                    white_count = np.count_nonzero(boardDetected == 1)
-                    empty_count = np.count_nonzero(boardDetected == 0)
-                    
-                    print("\n" + "="*60)
-                    print("✗ INVALID MOVE - Move rejected")
-                    print("="*60)
-                    print(f"  Detected pieces: Black={black_count}, White={white_count}, Empty={empty_count}")
-                    print(f"  Current turn: {'WHITE (you)' if self.game.turn == WHITE else 'BLACK (AI)'}")
-                    
-                    # Analyze what changed
-                    self._analyze_board_changes(boardDetected)
-                    
-                    if self.game.turn == WHITE:
-                        print("\n  YOUR TURN - Move a WHITE piece:")
-                        try:
-                            # Get all WHITE pieces
-                            white_pieces = self.game.board.get_all_pieces_by_color(WHITE)
-                            
-                            if white_pieces and len(white_pieces) > 0:
-                                # Calculate valid moves for each piece
-                                movable_pieces = []
-                                for piece in white_pieces:
-                                    valid_moves = self.game.board.get_valid_moves(piece)
-                                    if valid_moves and len(valid_moves) > 0:
-                                        movable_pieces.append((piece, valid_moves))
-                                
-                                if len(movable_pieces) > 0:
-                                    print(f"  You have {len(movable_pieces)} WHITE pieces that can move:")
-                                    for piece, moves in movable_pieces:
-                                        row, col = piece.row, piece.col
-                                        position = row * 8 + col
-                                        move_positions = [move[0] * 8 + move[1] for move in moves.keys()]
-                                        print(f"    • Piece at position {position} (row {row}, col {col}) → can move to: {move_positions}")
-                                else:
-                                    print("  ⚠ No valid moves available for WHITE pieces!")
-                            else:
-                                print("  ⚠ No WHITE pieces found on board!")
-                        except Exception as e:
-                            print(f"  ⚠ Error getting valid moves: {e}")
-                            print("  → Try moving any WHITE piece (cyan) diagonally forward")
-                    
-                    print("="*60 + "\n")
-                    
-                self.isPlayerMoveDone = False
-                self.wait = True
+                    print("  ⚠ No valid moves available for WHITE pieces!")
+            else:
+                print("  ⚠ No WHITE pieces found on board!")
+        except Exception as e:
+            print(f"  ⚠ Error getting valid moves: {e}")
 
     def findDifference(self, newCameraImage, oldCameraImage):
         image2 = oldCameraImage
