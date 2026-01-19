@@ -113,6 +113,8 @@ private:
                 }
                 frame_msg.hands.push_back(std::move(msg));
             }
+            // amount of hands  frame_msg detected print
+            RCLCPP_INFO(this->get_logger(), "Detected %zu hands in frame", frame_msg.hands.size());
 
             publisher_->publish(frame_msg);
         }

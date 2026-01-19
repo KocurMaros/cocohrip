@@ -25,6 +25,7 @@ find_package(moveit_visual_tools REQUIRED)
 find_package(rviz_visual_tools REQUIRED)
 find_package(gripper_srv REQUIRED)
 find_package(moveit_ros_planning REQUIRED)
+find_package(leap_gesture_interface REQUIRED)
 
 # Include C++ headers
 include_directories(include)
@@ -39,6 +40,7 @@ ament_target_dependencies(robot_pose_utility
     rclcpp
     geometry_msgs
     sensor_msgs
+    leap_gesture_interface
 )
 target_include_directories(robot_pose_utility PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -70,6 +72,7 @@ ament_target_dependencies(robot_control_node
     moveit_visual_tools
     gripper_srv
     rviz_visual_tools
+    leap_gesture_interface
 )
 target_include_directories(robot_control_node PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

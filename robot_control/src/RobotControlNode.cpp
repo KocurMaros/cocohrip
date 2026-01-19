@@ -25,8 +25,8 @@ RobotControlNode::RobotControlNode()
     handDetectedSub = this->create_subscription<checkers_msgs::msg::HandDetected>(
         "/hand_detected", 10, std::bind(&RobotControlNode::hand_detected_callback, this, std::placeholders::_1));
 
-    handDetectedLMSub = this->create_subscription<std_msgs::msg::String>(
-            "leap_gesture", 10, std::bind(&RobotControlNode::hand_detected_lm_callback, this, std::placeholders::_1));
+    handDetectedLMSub = this->create_subscription<leap_gesture_interface::msg::LeapFrame>(
+            "/leap_frame", 10, std::bind(&RobotControlNode::hand_detected_lm_callback, this, std::placeholders::_1));
 
     rosOutSub = this->create_subscription<rcl_interfaces::msg::Log>(
         "/rosout",10,std::bind(&RobotControlNode::ros_out_callback, this, std::placeholders::_1));
@@ -530,6 +530,11 @@ void RobotControlNode::stop() {
     RCLCPP_WARN(this->get_logger(), "Stop requested - current movement will complete");
 }
 
+void RobotControlNode::continue_move() {
+    isStop = false;
+    RCLCPP_INFO(this->get_logger(), "Continuing movement");
+}
+
 void RobotControlNode::handle_resume_movement(
     const std::shared_ptr<checkers_msgs::srv::ResumeMovement::Request> request,
     std::shared_ptr<checkers_msgs::srv::ResumeMovement::Response> response) {
@@ -629,7 +634,14 @@ void RobotControlNode::hand_detected_callback(const checkers_msgs::msg::HandDete
     }
 }
 
-void RobotControlNode::hand_detected_lm_callback(const std_msgs::msg::String::SharedPtr msg) {
+void RobotControlNode::hand_detected_lm_callback(const leap_gesture_interface::msg::LeapFrame::SharedPtr msg) {
+    
+    if(msg->n_hands > 0 && isRobotMoving) {
+        stop();
+    }
+    else if(msg->n_hands == 0 && isStop){
+        isStop = false;
+    }
     // Implementation if needed
 }
 
