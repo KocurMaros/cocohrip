@@ -14,33 +14,386 @@ class BoardDetection:
         
 
     def _init(self):
+        # 1. Camera Adjustment Phase
+        self._camera_adjustment_window()
+
+        # 2. Board Corner Detection (AUTO)
+        print("\nAttempting automatic board detection...")
+        auto_corners = self._auto_detect_corners()
+        
+        if auto_corners is not None:
+            self.bounderies = auto_corners
+            print("✓ Automatic detection successful!")
+        else:
+            print("⚠ Automatic detection failed. Falling back to manual selection.")
+            self.bounderies = self._get_trim_param_manual()
+            
+        # 3. Piece Placement & Verification (with Adjustment)
+        # We skip "_calibrate_thresholds_from_corners" because auto-detect
+        # doesn't know where pieces are.
+        # Instead, we set defaults and let user verify in the placement window.
+        self.empty_variance_threshold = 15.0
+        self.black_variance_threshold = 1000.0
+        self.white_piece_threshold = 1000.0 # Anything above black
+        
+        self._piece_placement_window()
+
+        # 4. Final initialization
         self.numberOfEmptyFields = 40
         self.param1ForGetAllContours = 255
-        self.bounderies = self._get_trim_param_manual()
-
-        cameraImage = self.ximeaCamera.get_camera_image()
-        cameraImage = self._trim_image_perspective(cameraImage, self.bounderies)
-
-        self.gameBoardFieldsContours = self._get_contours(cameraImage)
+        self.gameBoardFieldsContours = self._get_grid_squares_contours()
         
-        # Initialize variance thresholds (will be set during calibration)
-        self.empty_variance_threshold = 500  # Empty squares have low variance ~200-500
-        self.black_variance_threshold = 1000  # Black pieces ~700-900, White pieces >1100
-        
-        # Initialize selected difficulty (will be set during calibration)
-        self.selected_difficulty = 3  # Default: MEDIUM
-        
-        # Add flags to track initialization state
         self.is_initialized = False
-        self.trackbars_created = False
+        self.selected_difficulty = 3
+
+    def _auto_detect_corners(self):
+        """
+        Automatically detect the board corners using contour analysis.
+        Attributes the largest quadrilateral contour as the board.
+        Sorts corners: Top-Left, Top-Right, Bottom-Right, Bottom-Left.
+        """
+        # Get image
+        image = self.ximeaCamera.get_camera_image()
+        if image is None:
+            return None
+        
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        
+        # Blur and Threshold
+        blur = cv2.GaussianBlur(gray, (5, 5), 0)
+        # Simple binary threshold or adaptive
+        thresh = cv2.adaptiveThreshold(blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                      cv2.THRESH_BINARY_INV, 11, 2)
+        
+        # Find contours
+        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        # Filter for the board
+        # We assume the board is the largest quadrilateral
+        largest_area = 0
+        board_cnt = None
+        
+        for cnt in contours:
+            area = cv2.contourArea(cnt)
+            # Filter small noise
+            if area < 50000: # Adjust based on resolution
+                continue
+                
+            peri = cv2.arcLength(cnt, True)
+            approx = cv2.approxPolyDP(cnt, 0.02 * peri, True)
+            
+            if len(approx) == 4 and area > largest_area:
+                largest_area = area
+                board_cnt = approx
+
+        if board_cnt is not None:
+            # Reshape to 4x2
+            pts = board_cnt.reshape(4, 2)
+            
+            # Sort points: TL, TR, BR, BL
+            # We can use sum (x+y) and diff (y-x)
+            # TL: min(x+y)
+            # BR: max(x+y)
+            # TR: min(y-x) -> or max(x-y)?
+            # BL: max(y-x)
+            
+            # Let's use a robust sorter
+            rect = np.zeros((4, 2), dtype="float32")
+            
+            s = pts.sum(axis=1)
+            rect[0] = pts[np.argmin(s)] # TL
+            rect[2] = pts[np.argmax(s)] # BR
+
+            diff = np.diff(pts, axis=1)
+            rect[1] = pts[np.argmin(diff)] # TR
+            rect[3] = pts[np.argmax(diff)] # BL
+            
+            # Orient the corners based on variance analysis
+            # We need to find rotation 0, 90, 180, 270 that matches:
+            # TL=Empty, TR=BlackPiece, BR=Empty, BL=WhitePiece
+            rect = self._orient_corners(rect, image)
+            
+            return rect
+            
+        return None
+
+    def _orient_corners(self, corners, image):
+        """
+        Check all 4 rotations of the corners to find the one that matches 
+        the expected board setup:
+        TL: Empty (Low Variance)
+        TR: Black Piece (Med Variance)
+        BR: Empty (Low Variance)
+        BL: White Piece (High Variance)
+        """
+        best_corners = corners
+        best_score = float('inf')
+        
+        # Define expected variance ranks: 0=Low, 1=Med, 2=High
+        # TL(0), TR(1), BR(0), BL(2)
+        
+        for _ in range(4):
+            # Warp to inspect corners
+            warped = self._trim_image_perspective(image, corners)
+            
+            # Extract corners
+            # TL: warped[0:100, 0:100]
+            roi_tl = warped[10:90, 10:90]
+            # TR: warped[0:100, 700:800]
+            roi_tr = warped[10:90, 710:790]
+            # BR: warped[700:800, 700:800]
+            roi_br = warped[710:790, 710:790]
+            # BL: warped[700:800, 0:100]
+            roi_bl = warped[710:790, 10:90]
+            
+            v_tl = self._calculate_variance(roi_tl)
+            v_tr = self._calculate_variance(roi_tr)
+            v_br = self._calculate_variance(roi_br)
+            v_bl = self._calculate_variance(roi_bl)
+            
+            # Check pattern:
+            # TL & BR should be Empty (< 200 approx)
+            # TR should be > TL (Piece)
+            # BL should be > TR (White > Black)
+            
+            # Simple heuristic score:
+            # We want minimize (v_tl + v_br) and maximize (v_bl - v_tr) if White >> Black
+            # But let's just check the logic based on previous values
+            
+            score = 0
+            # Penalty if TL or BR are not low
+            score += v_tl + v_br
+            
+            # We expect TR to be ~800, BL to be >1200
+            # If TR is small (empty), that's bad -> add huge penalty
+            if v_tr < 200: score += 10000
+            
+            # If BL is small (empty), that's bad
+            if v_bl < 200: score += 10000
+            
+            # If BL < TR (White should be > Black), penalty
+            if v_bl < v_tr: score += 5000
+            
+            if score < best_score:
+                best_score = score
+                best_corners = corners.copy()
+            
+            # Rotate corners for next iteration: [0,1,2,3] -> [3,0,1,2] (Clockwise shift of points on image?)
+            # No, if we rotate the *indexes*, we are changing which point is TL.
+            # corners is [TL, TR, BR, BL]
+            # If we rotate board 90deg CW, the OLD TL becomes the NEW TR.
+            # So the NEW TL is the OLD BL.
+            # new_corners = [old_BL, old_TL, old_TR, old_BR]
+            corners = np.roll(corners, 1, axis=0) # [BL, TL, TR, BR]
+            
+        print(f"  → Oriented corners with score: {best_score}")
+        return best_corners
+
+    def _camera_adjustment_window(self):
+        print("\n" + "="*60)
+        print("STEP 0: CAMERA ADJUSTMENT")
+        print("="*60)
+        print("Adjust the camera so the whole board is visible.")
+        print("Press SPACE to continue when ready.")
+        print("-" * 60 + "\n")
+
+        while True:
+            image = self.ximeaCamera.get_camera_image()
+            display = image.copy()
+            cv2.putText(display, "Adjust Camera. Press SPACE to continue", (20, 40), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            cv2.imshow("Camera Adjustment", display)
+            
+            if cv2.waitKey(1) & 0xFF == 32: # SPACE
+                cv2.destroyWindow("Camera Adjustment")
+                break
+
+    def _calibrate_thresholds_from_corners(self):
+        """
+        Calculate variance thresholds based on the 4 selected corners.
+        Corner 1 (TL): White square on black side (Empty)
+        Corner 2 (TR): Black square with black piece
+        Corner 3 (BR): White square on white side
+        Corner 4 (BL): White piece on black square
+        """
+        image = self.ximeaCamera.get_camera_image()
+        warped = self._trim_image_perspective(image, self.bounderies)
+        
+        # Grid size is 800x800, so cell is 100x100
+        # Get ROIs (top-left, top-right, bottom-right, bottom-left)
+        # Add small margin to avoid edge artifacts
+        margin = 10
+        cell_size = 100
+        
+        # TL: warped[0:100, 0:100]
+        roi_tl = warped[margin:cell_size-margin, margin:cell_size-margin]
+        # TR: warped[0:100, 700:800]
+        roi_tr = warped[margin:cell_size-margin, 700+margin:800-margin]
+        # BR: warped[700:800, 700:800]
+        roi_br = warped[700+margin:800-margin, 700+margin:800-margin]
+        # BL: warped[700:800, 0:100]
+        roi_bl = warped[700+margin:800-margin, margin:cell_size-margin]
+        
+        var_tl = self._calculate_variance(roi_tl) # Empty White Square
+        var_tr = self._calculate_variance(roi_tr) # Black Piece
+        var_br = self._calculate_variance(roi_br) # Empty White Square (or similar to TL)
+        var_bl = self._calculate_variance(roi_bl) # White Piece
+        
+        print("\n" + "="*60)
+        print("CALIBRATION RESULTS")
+        print("="*60)
+        print(f"Corner 1 (Empty/White Sq): Var = {var_tl:.2f}")
+        print(f"Corner 2 (Black Piece):    Var = {var_tr:.2f}")
+        print(f"Corner 3 (Empty/White Sq): Var = {var_br:.2f}")
+        print(f"Corner 4 (White Piece):    Var = {var_bl:.2f}")
+        
+        # Set thresholds based on user logic and calibration
+        # User: Empty < 10
+        # User: Black Piece < 1200 (typically < 800)
+        # User: White Piece is second threshold
+        
+        # We'll use the measured values to refine, but respect user limits
+        self.empty_variance_threshold = 15.0 # Slightly lenient than 10
+        if var_tl < 20:
+             self.empty_variance_threshold = max(10, var_tl + 5)
+        
+        # Define Black Piece threshold
+        # It should be > empty but covers the black piece variance
+        # If var_tr is e.g. 500, we can set threshold around 800-1000
+        self.black_variance_threshold = 1200 # Default upper limit
+        # If monitored black piece is lower, we can tighten it, but 1200 is safe if white is higher
+        
+        # Check if White Piece is distinguished by higher variance
+        self.white_piece_threshold = 1200 # Default
+        
+        if var_bl > var_tr:
+            # White piece has higher variance
+            # Set threshold between Black and White
+            midpoint = (var_tr + var_bl) / 2
+            self.white_piece_threshold = midpoint
+        else:
+            # Fallback if logic is inverted (unlikely for standard pieces)
+            self.white_piece_threshold = 1200
+            
+        print(f"Set Empty Threshold: < {self.empty_variance_threshold}")
+        print(f"Set Black Threshold: < {self.black_variance_threshold}")
+        print(f"Set White Threshold: > {self.white_piece_threshold}")
+        print("-" * 60 + "\n")
+
+    def _calculate_variance(self, image):
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        mean, stddev = cv2.meanStdDev(gray)
+        return stddev[0][0] ** 2
+
+    def _piece_placement_window(self):
+        print("\n" + "="*60)
+        print("STEP 3: PIECE PLACEMENT CHECK")
+        print("="*60)
+        print("Place pieces in starting positions.")
+        print("Press SPACE or ENTER to confirm and Start Game.")
+        print("-" * 60 + "\n")
+        
+        while True:
+            image = self.ximeaCamera.get_camera_image()
+            if image is None:
+                continue
+
+            warped = self._trim_image_perspective(image, self.bounderies)
+            display = warped.copy()
+            
+            # Analyze grid
+            cell_size = 100
+            margin = 10
+            
+            for row in range(8):
+                for col in range(8):
+                    x1 = col * cell_size
+                    y1 = row * cell_size
+                    x2 = x1 + cell_size
+                    y2 = y1 + cell_size
+                    
+                    roi = warped[y1+margin:y2-margin, x1+margin:x2-margin]
+                    variance = self._calculate_variance(roi)
+                    
+                    # Detection
+                    color = (0, 255, 255) # Yellow unknown
+                    label = "?"
+                    
+                    if variance < self.empty_variance_threshold:
+                        label = "E"
+                        color = (0, 255, 0) # Green Empty
+                    elif variance < self.black_variance_threshold:
+                        label = "B"
+                        color = (0, 0, 255) # Red for Black
+                    elif variance >= self.white_piece_threshold: # Assuming white is higher
+                        label = "W"
+                        color = (255, 255, 255) # White
+                    else:
+                        label = "?" 
+                        
+                    cv2.rectangle(display, (x1, y1), (x2, y2), color, 2)
+                    cv2.putText(display, f"{int(variance)}", (x1+5, y2-5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+                    cv2.putText(display, label, (x1+40, y1+60), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
+
+            cv2.imshow("Piece Placement & Detection", display)
+            
+            key = cv2.waitKey(10) & 0xFF
+            # Accept ENTER (13) or SPACE (32)
+            if key == 13 or key == 32: 
+                cv2.destroyWindow("Piece Placement & Detection")
+                print("✓ Board setup confirmed! Starting game...\n")
+                break
+                
+            # Handle standard exit (ESC)
+            if key == 27:
+                cv2.destroyWindow("Piece Placement & Detection")
+                print("⚠ Detection skipped by user.")
+                break
+
+    def _get_grid_squares_contours(self):
+        """
+        Generate strict 8x8 grid contours for the warped 800x800 image.
+        Each square is 100x100.
+        Returns: 8x8 list of [x, y, w, h]
+        """
+        contours = []
+        cell_size = 100
+        for row in range(8):
+            row_cnts = []
+            for col in range(8):
+                x = col * cell_size
+                y = row * cell_size
+                # Format: [x, y, w, h]
+                row_cnts.append([x, y, cell_size, cell_size])
+            contours.append(row_cnts)
+        return contours
+
+    def get_board(self, cameraImage, game):
+        """
+        Main entry point for board detection during gameplay
+        """
+        # Use perspective transform with cached corners
+        cameraImage = self._trim_image_perspective(cameraImage, self.bounderies)
+        
+        # We don't need _get_empty_fields_and_pieces anymore as calibration is done.
+        # Just use the thresholds to detect board state.
+        
+        # Ensure gameBoardFieldsContours is set
+        if not hasattr(self, 'gameBoardFieldsContours') or self.gameBoardFieldsContours is None:
+             self.gameBoardFieldsContours = self._get_grid_squares_contours()
+
+        self.set_number_of_empty_fields(game)
+        
+        # Pass [] as emptyFieldsContours since it's unused in _get_board_from_image
+        return self._get_board_from_image(cameraImage, [])
 
     def _get_trim_param_manual(self):
         """
         Manual board corner selection - click 4 corners in order:
-        1. Top-left
-        2. Top-right
-        3. Bottom-right
-        4. Bottom-left
+        1. White square on black side (Top-Left)
+        2. Black square with black piece (Top-Right)
+        3. White square on white side (Bottom-Right)
+        4. White piece on black square (Bottom-Left)
         """
         corners = []
         clone = None
@@ -73,10 +426,10 @@ class BoardDetection:
         print("STEP 1: BOARD CORNER SELECTION")
         print("="*60)
         print("Click on the 4 corners of the board in this order:")
-        print("  1. Top-left corner")
-        print("  2. Top-right corner")
-        print("  3. Bottom-right corner")
-        print("  4. Bottom-left corner")
+        print("  1. White square on black side (Top-Left)")
+        print("  2. Black square with black piece (Top-Right)")
+        print("  3. White square on white side (Bottom-Right)")
+        print("  4. White piece on black square (Bottom-Left)")
         print("\nControls:")
         print("  SPACE - Confirm selection")
         print("  R     - Reset points")
@@ -912,21 +1265,6 @@ class BoardDetection:
         
         return board
 
-    def get_board(self, cameraImage, game):
-        """
-        Main entry point for board detection during gameplay
-        """
-        # Use perspective transform
-        cameraImage = self._trim_image_perspective(cameraImage, self.bounderies)
-        cv2.imshow("boardCamera", cameraImage)
-        
-        self.set_number_of_empty_fields(game)
-
-        # Use unified detection method
-        emptyFieldsContours = self._get_empty_fields_and_pieces(cameraImage)
-        
-        return self._get_board_from_image(cameraImage, emptyFieldsContours)
-        
     def set_number_of_empty_fields(self, game):
         """
         Update the expected number of empty fields based on current game state

@@ -96,8 +96,8 @@ void RobotControlNode::initMoveGroup() {
         return;
     }
 
-    pose_utility_->setVelocityScaling(0.8);  // Faster movement speed (80%)
-    pose_utility_->setAccelerationScaling(0.3);  // Much faster acceleration
+    pose_utility_->setVelocityScaling(1.0);  // Faster movement speed (100%)`
+    pose_utility_->setAccelerationScaling(0.7);  // Much faster acceleration
 
     RCLCPP_INFO(this->get_logger(), "RobotPoseUtility initialized successfully");
 
@@ -148,7 +148,7 @@ bool RobotControlNode::moveToSafeApproachPosition() {
                 center_x, center_y, approach_z);
     
     // Move to approach position with longer planning time for large movements
-    pose_utility_->setVelocityScaling(0.5);  // Slower for safety
+    pose_utility_->setVelocityScaling(1.0);  // Slower for safety
     
     bool success = pose_utility_->moveToPose(approach_pose);
     
@@ -168,7 +168,7 @@ bool RobotControlNode::moveToSafeApproachPosition() {
     }
     
     // Restore normal velocity
-    pose_utility_->setVelocityScaling(0.8);
+    pose_utility_->setVelocityScaling(1.0);
     
     return success;
 }
@@ -217,9 +217,9 @@ void RobotControlNode::mainLoop() {
                     lift_pose.position.z = zSafeTransition + 0.05;  // Extra clearance
                     
                     isRobotMoving = true;
-                    pose_utility_->setVelocityScaling(0.5);  // Slower for safety
+                    pose_utility_->setVelocityScaling(1.0);  // Slower for safety
                     bool success = pose_utility_->moveToPose(lift_pose);
-                    pose_utility_->setVelocityScaling(0.8);
+                    pose_utility_->setVelocityScaling(1.0);
                     
                     if (!success) {
                         RCLCPP_ERROR(this->get_logger(), "Failed to lift to safe height!");
