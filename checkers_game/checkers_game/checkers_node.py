@@ -4,7 +4,7 @@ import pygame
 from checkers_game.constants import WIDTH, HEIGHT, SQUARE_SIZE, RED, WHITE, BLACK
 # use package-qualified import so the module is found when the package is installed
 from checkers_game.camera.ximea_camera import XimeaCamera
-from checkers_game.camera.board_detection import BoardDetection
+from checkers_game.camera.board_detection import BoardDetection, DEBUG_MODE
 from checkers_game.checkers.game import Game
 from checkers_game.minimax.algorithm import WHITE, minimax
 import mediapipe as mp
@@ -108,7 +108,9 @@ class CheckersNode(Node):
         print("\n→ Set AI difficulty using the trackbar in calibration window")
         print("→ Press SPACE to confirm calibration, then 'S' to START")
         print("→ Press SPACE during gameplay to force move validation")
-        print(f"\n→ Default difficulty: {self.difficulty.name} (depth={self.ai_depth})\n")
+        print("→ Press 'R' during robot movement to finish manually")
+        print(f"\n→ Default difficulty: {self.difficulty.name} (depth={self.ai_depth})")
+        print(f"→ Debug windows: {'ENABLED' if DEBUG_MODE else 'DISABLED'}\n")
         
         # Start background detection thread
         # NOTE: Detection thread only gets camera images, NOT OpenCV windows
@@ -235,12 +237,37 @@ class CheckersNode(Node):
             print("\n[SPACE pressed] Forcing move validation...")
             self._force_validate_move()
         
+        # Press 'R' to manually finish robot movement and resume game
+        if key == ord('r') or key == ord('R'):
+            self._manual_resume_from_robot()
+        
         # Only process game logic if game has started
         if not self.game_started:
             return
         
         # State machine processing
         self._process_game_state(cameraImage, boardDetected, isHandDetected)
+    
+    def _manual_resume_from_robot(self):
+        """Manually finish robot movement and resume game to player's turn"""
+        if self.game_state == GameState.WAITING_FOR_ROBOT or self.waiting_for_robot:
+            print("\n" + "="*60)
+            print("[R pressed] MANUAL RESUME - Finishing robot movement manually")
+            print("="*60)
+            
+            with self.robot_lock:
+                self.isRobotMoveDone = True
+            
+            self.waiting_for_robot = False
+            self.pending_player_move = False
+            self.game_state = GameState.PLAYER_TURN
+            self.movement_detected = False
+            self.movement_stable_time = None
+            
+            print("✓ Robot movement marked as complete")
+            print("→ Your turn! Make your move on the board\n")
+        else:
+            print("\n[R pressed] Not waiting for robot - no action needed\n")
     
     def _start_game(self):
         """Initialize and start the game"""
@@ -272,6 +299,7 @@ class CheckersNode(Node):
         print("Example: Piece at position 40 → can move to position 32 or 33")
         print("\n→ Move a piece, then remove your hand completely")
         print("→ Wait for board to stabilize (0.8 seconds)")
+        print("→ Press 'R' to manually resume if robot gets stuck")
         print("="*60 + "\n")
     
     def _process_game_state(self, cameraImage, boardDetected, isHandDetected):
@@ -548,12 +576,14 @@ class CheckersNode(Node):
                 self.mp_drawing.draw_landmarks(rgb_frame, landmarks, self.mp_hands.HAND_CONNECTIONS)
                 min_x, min_y, max_x, max_y = self.get_hand_bounding_box(landmarks, rgb_frame)
                 cv2.rectangle(rgb_frame, (min_x, min_y), (max_x, max_y), (0, 255, 0), 2)
-                cv2.imshow("Hand Tracking", rgb_frame)
+                if DEBUG_MODE:
+                    cv2.imshow("Hand Tracking", rgb_frame)
                 if self.do_rectangles_overlap((min_x, min_y, max_x - min_x, max_y - min_y), board_coordinates):
                     return True
                 else:
                     return False
-        cv2.imshow("Hand Tracking", rgb_frame)
+        if DEBUG_MODE:
+            cv2.imshow("Hand Tracking", rgb_frame)
         return False
 
     @staticmethod
