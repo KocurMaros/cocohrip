@@ -190,6 +190,14 @@ bool RobotPoseUtility::moveToNamedTarget(const std::string& target_name)
         return false;
     }
     
+    // NOTE: stop_requested_ is NOT cleared here - caller must clear it before starting a movement sequence
+    
+    // Check if stop was requested before starting
+    if (stop_requested_.load()) {
+        RCLCPP_WARN(node_->get_logger(), "[RobotPoseUtility] Stop requested before moveToNamedTarget - aborting");
+        return false;
+    }
+    
     RCLCPP_INFO(node_->get_logger(), "[RobotPoseUtility] Moving to named target: %s", target_name.c_str());
     
     move_group_->setNamedTarget(target_name);
@@ -197,14 +205,29 @@ bool RobotPoseUtility::moveToNamedTarget(const std::string& target_name)
     moveit::planning_interface::MoveGroupInterface::Plan plan;
     moveit::core::MoveItErrorCode plan_result = move_group_->plan(plan);
     
+    // Check if stop was requested during planning
+    if (stop_requested_.load()) {
+        RCLCPP_WARN(node_->get_logger(), "[RobotPoseUtility] Stop requested during planning - aborting");
+        return false;
+    }
+    
     if (plan_result == moveit::core::MoveItErrorCode::SUCCESS) {
         RCLCPP_INFO(node_->get_logger(), "[RobotPoseUtility] Planning successful!");
         
         moveit::core::MoveItErrorCode execute_result = move_group_->execute(plan);
         
+        // Check if stop was requested during execution
+        if (stop_requested_.load()) {
+            RCLCPP_WARN(node_->get_logger(), "[RobotPoseUtility] Movement was stopped");
+            return false;
+        }
+        
         if (execute_result == moveit::core::MoveItErrorCode::SUCCESS) {
             RCLCPP_INFO(node_->get_logger(), "[RobotPoseUtility] Movement completed!");
             return true;
+        } else if (execute_result == moveit::core::MoveItErrorCode::PREEMPTED) {
+            RCLCPP_WARN(node_->get_logger(), "[RobotPoseUtility] Movement was preempted (stopped)");
+            return false;
         } else {
             RCLCPP_ERROR(node_->get_logger(), "[RobotPoseUtility] Execution failed with code: %d", execute_result.val);
             return false;
@@ -250,6 +273,10 @@ bool RobotPoseUtility::moveToPose(const geometry_msgs::msg::Pose& target_pose)
         RCLCPP_ERROR(node_->get_logger(), "[RobotPoseUtility] Not initialized!");
         return false;
     }
+    
+    // NOTE: stop_requested_ is NOT cleared here - caller must clear it before starting a movement sequence
+    // This allows stop to persist across multiple moveToPose calls in a sequence
+    
     geometry_msgs::msg::Pose adjusted_pose = target_pose;
     
     if (adjusted_pose.position.z < min_z_offset_) {
@@ -257,6 +284,12 @@ bool RobotPoseUtility::moveToPose(const geometry_msgs::msg::Pose& target_pose)
                     "[RobotPoseUtility] Target Z (%.4f) below minimum (%.4f)! Clamping to minimum.",
                     adjusted_pose.position.z, min_z_offset_);
         adjusted_pose.position.z = min_z_offset_;
+    }
+    
+    // Check if stop was requested before planning
+    if (stop_requested_.load()) {
+        RCLCPP_WARN(node_->get_logger(), "[RobotPoseUtility] Stop requested before planning - aborting");
+        return false;
     }
     
     RCLCPP_INFO(node_->get_logger(), "[RobotPoseUtility] Moving to Cartesian pose");
@@ -270,16 +303,39 @@ bool RobotPoseUtility::moveToPose(const geometry_msgs::msg::Pose& target_pose)
     moveit::planning_interface::MoveGroupInterface::Plan plan;
     moveit::core::MoveItErrorCode plan_result = move_group_->plan(plan);
     
+    // Check if stop was requested during planning
+    if (stop_requested_.load()) {
+        RCLCPP_WARN(node_->get_logger(), "[RobotPoseUtility] Stop requested during planning - aborting");
+        return false;
+    }
+    
     if (plan_result == moveit::core::MoveItErrorCode::SUCCESS) {
         RCLCPP_INFO(node_->get_logger(), "[RobotPoseUtility] Planning successful!");
         
+        // Check if stop was requested before execution
+        if (stop_requested_.load()) {
+            RCLCPP_WARN(node_->get_logger(), "[RobotPoseUtility] Stop requested before execution - aborting");
+            return false;
+        }
+        
+        // Execute the plan - this is blocking but stop() can interrupt it
         moveit::core::MoveItErrorCode execute_result = move_group_->execute(plan);
+        
+        // Check if stop was requested during execution
+        if (stop_requested_.load()) {
+            RCLCPP_WARN(node_->get_logger(), "[RobotPoseUtility] Movement was stopped");
+            return false;
+        }
         
         if (execute_result == moveit::core::MoveItErrorCode::SUCCESS) {
             RCLCPP_INFO(node_->get_logger(), "[RobotPoseUtility] Movement successful!");
             return true;
+        } else if (execute_result == moveit::core::MoveItErrorCode::PREEMPTED) {
+            RCLCPP_WARN(node_->get_logger(), "[RobotPoseUtility] Movement was preempted (stopped)");
+            return false;
         } else {
             RCLCPP_ERROR(node_->get_logger(), "[RobotPoseUtility] Execution failed with code: %d", execute_result.val);
+            return false;
         }
     } else {
         RCLCPP_ERROR(node_->get_logger(), "[RobotPoseUtility] Planning failed with code: %d", plan_result.val);
@@ -316,5 +372,14 @@ void RobotPoseUtility::setAccelerationScaling(double factor)
     if (move_group_) {
         move_group_->setMaxAccelerationScalingFactor(factor);
         RCLCPP_DEBUG(node_->get_logger(), "[RobotPoseUtility] Acceleration scaling set to %.2f", factor);
+    }
+}
+
+void RobotPoseUtility::stopMovement()
+{
+    if (move_group_) {
+        RCLCPP_WARN(node_->get_logger(), "[RobotPoseUtility] Stopping movement!");
+        stop_requested_.store(true);
+        move_group_->stop();
     }
 }

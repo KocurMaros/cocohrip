@@ -96,8 +96,8 @@ void RobotControlNode::initMoveGroup() {
         return;
     }
 
-    pose_utility_->setVelocityScaling(1.0);  // Faster movement speed (100%)`
-    pose_utility_->setAccelerationScaling(0.7);  // Much faster acceleration
+    pose_utility_->setVelocityScaling(0.8);  // Faster movement speed (80%)
+    pose_utility_->setAccelerationScaling(0.3);  // Much faster acceleration
 
     RCLCPP_INFO(this->get_logger(), "RobotPoseUtility initialized successfully");
 
@@ -147,16 +147,36 @@ bool RobotControlNode::moveToSafeApproachPosition() {
                 "Approach position: X=%.4f, Y=%.4f, Z=%.4f", 
                 center_x, center_y, approach_z);
     
+    // Check if stopped before starting
+    if (isStop.load()) {
+        RCLCPP_WARN(this->get_logger(), "Movement cancelled - robot is stopped");
+        return false;
+    }
+    
     // Move to approach position with longer planning time for large movements
-    pose_utility_->setVelocityScaling(1.0);  // Slower for safety
+    pose_utility_->setVelocityScaling(0.5);  // Slower for safety
     
     bool success = pose_utility_->moveToPose(approach_pose);
+    
+    // Check if stopped during movement
+    if (isStop.load()) {
+        RCLCPP_WARN(this->get_logger(), "Movement interrupted - robot was stopped");
+        pose_utility_->setVelocityScaling(0.8);
+        return false;
+    }
     
     if (success) {
         RCLCPP_INFO(this->get_logger(), "✅ Reached safe approach position");
         std::this_thread::sleep_for(std::chrono::seconds(2));  // Stabilize
     } else {
         RCLCPP_ERROR(this->get_logger(), "❌ Failed to reach approach position!");
+        
+        // Check if stopped before retry
+        if (isStop.load()) {
+            pose_utility_->setVelocityScaling(0.8);
+            return false;
+        }
+        
         // Try again with more planning time
         RCLCPP_WARN(this->get_logger(), "Retrying with extended planning time...");
         success = pose_utility_->moveToPose(approach_pose);
@@ -168,7 +188,7 @@ bool RobotControlNode::moveToSafeApproachPosition() {
     }
     
     // Restore normal velocity
-    pose_utility_->setVelocityScaling(1.0);
+    pose_utility_->setVelocityScaling(0.8);
     
     return success;
 }
@@ -176,7 +196,7 @@ bool RobotControlNode::moveToSafeApproachPosition() {
 void RobotControlNode::mainLoop() {
     getPose();
     
-    if(isStop || isRobotMoving) {
+    if(isStop.load() || isRobotMoving.load()) {
         return;
     }
     
@@ -216,18 +236,31 @@ void RobotControlNode::mainLoop() {
                     geometry_msgs::msg::Pose lift_pose = *current_pose_opt;
                     lift_pose.position.z = zSafeTransition + 0.05;  // Extra clearance
                     
-                    isRobotMoving = true;
-                    pose_utility_->setVelocityScaling(1.0);  // Slower for safety
+                    // Check if stopped before lift
+                    if (isStop.load()) {
+                        RCLCPP_WARN(this->get_logger(), "Lift cancelled - robot is stopped");
+                        return;
+                    }
+                    
+                    isRobotMoving.store(true);
+                    pose_utility_->setVelocityScaling(0.5);  // Slower for safety
                     bool success = pose_utility_->moveToPose(lift_pose);
-                    pose_utility_->setVelocityScaling(1.0);
+                    pose_utility_->setVelocityScaling(0.8);
+                    
+                    // Check if stopped during lift
+                    if (isStop.load()) {
+                        RCLCPP_WARN(this->get_logger(), "Lift interrupted - robot was stopped");
+                        isRobotMoving.store(false);
+                        return;
+                    }
                     
                     if (!success) {
                         RCLCPP_ERROR(this->get_logger(), "Failed to lift to safe height!");
                         targetPositions.clear();
-                        isRobotMoving = false;
+                        isRobotMoving.store(false);
                         return;
                     }
-                    isRobotMoving = false;
+                    isRobotMoving.store(false);
                     RCLCPP_INFO(this->get_logger(), "✅ Lifted to safe height");
                 }
                 
@@ -272,7 +305,7 @@ void RobotControlNode::mainLoop() {
                        "Moving to position [%.4f, %.4f, %.4f] %s",
                        target_pose.position.x, target_pose.position.y, target_pose.position.z,
                        task != Task::NONE ? "(gripper action pending)" : "");
-            isRobotMoving = true;
+            isRobotMoving.store(true);
             moveInThread(target_pose);
             return;
         }
@@ -338,19 +371,42 @@ void RobotControlNode::mainLoop() {
                 target_pose_index++;
                 trajectory_pose_index = 0;
                 
-                // Move to named "home" position
-                isRobotSendingHome = true;
-                isRobotMoving = true;
+                // Calculate and store HOME pose for potential resumption
+                geometry_msgs::msg::Pose current_pose = getPose();
+                current_pose.position.z += zMoveOffset;
+                homePose = current_pose;
+                
+                // Move to "fake home" position (just lift up)
+                isRobotSendingHome.store(true);
+                isFinalHome.store(false);  // This is NOT the final home
+                isRobotMoving.store(true);
                 
                 if (moveThread && moveThread->joinable()) {
                     moveThread->join();
                 }
                 moveThread = std::make_unique<std::thread>([this]() {
                     RCLCPP_INFO(this->get_logger(), "Moving to named target: fake home");
-                    geometry_msgs::msg::Pose current_pose = getPose();
-                    current_pose.position.z += zMoveOffset;
+                    
+                    // Clear stop request before starting new movement sequence
+                    if (pose_utility_ && pose_utility_->isInitialized()) {
+                        pose_utility_->clearStopRequest();
+                    }
+                    
+                    // Check if stopped before starting
+                    if (isStop.load()) {
+                        RCLCPP_WARN(this->get_logger(), "HOME movement cancelled - robot is stopped");
+                        isRobotMoving.store(false);
+                        return;
+                    }
 
-                    bool success = pose_utility_->moveToPose(current_pose);
+                    bool success = pose_utility_->moveToPose(homePose);
+                    
+                    // Check if stopped during movement
+                    if (isStop.load()) {
+                        RCLCPP_WARN(this->get_logger(), "HOME movement interrupted - robot was stopped");
+                        isRobotMoving.store(false);
+                        return;
+                    }
                     
                     if (success) {
                         RCLCPP_INFO(this->get_logger(), "✅ Reached 'fake home' position");
@@ -358,12 +414,12 @@ void RobotControlNode::mainLoop() {
                         RCLCPP_ERROR(this->get_logger(), "❌ Failed to reach 'fake home' position!");
                     }
                     
-                    isRobotMoving = false;
+                    isRobotMoving.store(false);
                     
-                    if(isRobotSendingHome) {
+                    if(isRobotSendingHome.load()) {
                         fileIndex++;
                         currentFileName = "robot_data_" + std::to_string(fileIndex) + ".csv";
-                        isRobotSendingHome = false;
+                        isRobotSendingHome.store(false);
                         
                         RCLCPP_INFO(this->get_logger(), "✅ Robot reached FAKE HOME position");
                         
@@ -393,20 +449,51 @@ void RobotControlNode::mainLoop() {
             targetPositions.clear();
             trajectory_list.clear();
             
+            // Calculate and store HOME pose for potential resumption
+            geometry_msgs::msg::Pose current_pose = getPose();
+            current_pose.position.z += zMoveOffset;
+            homePose = current_pose;
+            
             // Final HOME
-            isRobotSendingHome = true;
-            isRobotMoving = true;
+            isRobotSendingHome.store(true);
+            isFinalHome.store(true);  // This IS the final home (uses moveToNamedTarget)
+            isRobotMoving.store(true);
             
             if (moveThread && moveThread->joinable()) {
                 moveThread->join();
             }
             moveThread = std::make_unique<std::thread>([this]() {
                 RCLCPP_INFO(this->get_logger(), "Moving to final named target: home");
-                geometry_msgs::msg::Pose current_pose = getPose();
-                current_pose.position.z += zMoveOffset;
-                bool success = pose_utility_->moveToPose(current_pose);
+                
+                // Clear stop request before starting new movement sequence
+                if (pose_utility_ && pose_utility_->isInitialized()) {
+                    pose_utility_->clearStopRequest();
+                }
+                
+                // Check if stopped before starting
+                if (isStop.load()) {
+                    RCLCPP_WARN(this->get_logger(), "Final HOME movement cancelled - robot is stopped");
+                    isRobotMoving.store(false);
+                    return;
+                }
+                
+                bool success = pose_utility_->moveToPose(homePose);
+                
+                // Check if stopped after first movement
+                if (isStop.load()) {
+                    RCLCPP_WARN(this->get_logger(), "Final HOME movement interrupted - robot was stopped");
+                    isRobotMoving.store(false);
+                    return;
+                }
 
                 success = pose_utility_->moveToNamedTarget("home") && success;
+                
+                // Check if stopped after second movement
+                if (isStop.load()) {
+                    RCLCPP_WARN(this->get_logger(), "Final HOME movement interrupted - robot was stopped");
+                    isRobotMoving.store(false);
+                    return;
+                }
                 
                 if (success) {
                     RCLCPP_INFO(this->get_logger(), "✅ Reached final 'home' position");
@@ -414,12 +501,13 @@ void RobotControlNode::mainLoop() {
                     RCLCPP_ERROR(this->get_logger(), "❌ Failed to reach final 'home' position!");
                 }
                 
-                isRobotMoving = false;
+                isRobotMoving.store(false);
                 
-                if(isRobotSendingHome) {
+                if(isRobotSendingHome.load()) {
                     fileIndex++;
                     currentFileName = "robot_data_" + std::to_string(fileIndex) + ".csv";
-                    isRobotSendingHome = false;
+                    isRobotSendingHome.store(false);
+                    isFinalHome.store(false);
                     
                     RCLCPP_INFO(this->get_logger(), "✅ All tasks complete! Robot at HOME");
                     
@@ -501,24 +589,61 @@ geometry_msgs::msg::Pose RobotControlNode::getPose() {
 }
 
 void RobotControlNode::move(geometry_msgs::msg::Pose targetPose) {
-    isRobotMoving = true;
+    isRobotMoving.store(true);
+    
+    // Check if stopped before starting movement
+    if (isStop.load()) {
+        RCLCPP_INFO(this->get_logger(), "Movement paused before start (isStop=true)");
+        isRobotMoving.store(false);
+        return;
+    }
     
     bool success = pose_utility_->moveToPose(targetPose);
     
+    // Check if we were stopped during movement
+    if (isStop.load()) {
+        RCLCPP_INFO(this->get_logger(), "Movement was stopped by isStop flag");
+        isRobotMoving.store(false);
+        return;
+    }
+    
     if (!success) {
-        RCLCPP_ERROR(this->get_logger(), "Movement failed! Retrying...");
+        RCLCPP_ERROR(this->get_logger(), "Movement failed!");
+        
+        // Check if stopped before retry
+        if (isStop.load()) {
+            RCLCPP_INFO(this->get_logger(), "Not retrying - robot is stopped");
+            isRobotMoving.store(false);
+            return;
+        }
+        
+        RCLCPP_INFO(this->get_logger(), "Retrying movement...");
         success = pose_utility_->moveToPose(targetPose);
-        if (!success) {
+        
+        if (!success && !isStop.load()) {
             RCLCPP_ERROR(this->get_logger(), "Movement failed after retry!");
-            isRobotMoving = false;
         }
     }
+    
+    isRobotMoving.store(false);
 }
 
 void RobotControlNode::moveInThread(geometry_msgs::msg::Pose targetPose) {
+    std::lock_guard<std::mutex> lock(moveMutex);
+    
     RCLCPP_INFO(this->get_logger(), 
                    "Moving to position: [%f, %f, %f]", 
                    targetPose.position.x, targetPose.position.y, targetPose.position.z);
+    
+    // Store target pose and mark as valid
+    target_pose = targetPose;
+    hasValidTargetPose.store(true);
+    
+    // Clear stop request in pose utility before starting new movement
+    if (pose_utility_ && pose_utility_->isInitialized()) {
+        pose_utility_->clearStopRequest();
+    }
+    
     if (moveThread && moveThread->joinable()) {
         moveThread->join();
     }
@@ -526,26 +651,158 @@ void RobotControlNode::moveInThread(geometry_msgs::msg::Pose targetPose) {
 }
 
 void RobotControlNode::stop() {
-    isStop = true;
-    RCLCPP_WARN(this->get_logger(), "Stop requested - current movement will complete");
+    if (isStop.load()) {
+        return;  // Already stopped
+    }
+    isStop.store(true);
+    RCLCPP_WARN(this->get_logger(), "⚠️ STOP requested - halting robot movement!");
+    
+    // Stop the robot via MoveIt
+    if (pose_utility_ && pose_utility_->isInitialized()) {
+        pose_utility_->stopMovement();
+    }
 }
 
 void RobotControlNode::continue_move() {
-    isStop = false;
-    RCLCPP_INFO(this->get_logger(), "Continuing movement");
+    if (!isStop.load()) {
+        return;  // Not stopped, nothing to continue
+    }
+    
+    RCLCPP_INFO(this->get_logger(), "✅ Continuing movement");
+    
+    // First clear the stop flags
+    isStop.store(false);
+    
+    // Clear the stop request in pose utility so new movements can proceed
+    if (pose_utility_ && pose_utility_->isInitialized()) {
+        pose_utility_->clearStopRequest();
+    }
+    
+    // Wait for previous movement thread to finish if still running
+    {
+        std::lock_guard<std::mutex> lock(moveMutex);
+        if (moveThread && moveThread->joinable()) {
+            moveThread->join();
+        }
+    }
+    
+    // Check if we were doing a HOME movement
+    if (isRobotSendingHome.load()) {
+        RCLCPP_INFO(this->get_logger(), "Resuming HOME movement");
+        
+        isRobotMoving.store(true);
+        
+        if (isFinalHome.load()) {
+            // Resume final HOME (with moveToNamedTarget)
+            moveThread = std::make_unique<std::thread>([this]() {
+                RCLCPP_INFO(this->get_logger(), "Resuming final HOME movement");
+                
+                // First move to saved homePose (lift position)
+                bool success = pose_utility_->moveToPose(homePose);
+                
+                if (isStop.load()) {
+                    RCLCPP_WARN(this->get_logger(), "Final HOME interrupted again");
+                    isRobotMoving.store(false);
+                    return;
+                }
+                
+                // Then move to named "home" target
+                success = pose_utility_->moveToNamedTarget("home") && success;
+                
+                if (isStop.load()) {
+                    RCLCPP_WARN(this->get_logger(), "Final HOME interrupted during named target");
+                    isRobotMoving.store(false);
+                    return;
+                }
+                
+                if (success) {
+                    RCLCPP_INFO(this->get_logger(), "✅ Reached final 'home' position");
+                } else {
+                    RCLCPP_ERROR(this->get_logger(), "❌ Failed to reach final 'home' position!");
+                }
+                
+                isRobotMoving.store(false);
+                
+                fileIndex++;
+                currentFileName = "robot_data_" + std::to_string(fileIndex) + ".csv";
+                isRobotSendingHome.store(false);
+                isFinalHome.store(false);
+                
+                RCLCPP_INFO(this->get_logger(), "✅ All tasks complete! Robot at HOME");
+                
+                auto message = checkers_msgs::msg::RobotMove();
+                message.robot_move_done = true;
+                robotMovePub->publish(message);
+            });
+        } else {
+            // Resume fake HOME (just lift position)
+            moveThread = std::make_unique<std::thread>([this]() {
+                RCLCPP_INFO(this->get_logger(), "Resuming fake HOME movement");
+                
+                bool success = pose_utility_->moveToPose(homePose);
+                
+                if (isStop.load()) {
+                    RCLCPP_WARN(this->get_logger(), "Fake HOME interrupted again");
+                    isRobotMoving.store(false);
+                    return;
+                }
+                
+                if (success) {
+                    RCLCPP_INFO(this->get_logger(), "✅ Reached 'fake home' position");
+                } else {
+                    RCLCPP_ERROR(this->get_logger(), "❌ Failed to reach 'fake home' position!");
+                }
+                
+                isRobotMoving.store(false);
+                
+                fileIndex++;
+                currentFileName = "robot_data_" + std::to_string(fileIndex) + ".csv";
+                isRobotSendingHome.store(false);
+                
+                RCLCPP_INFO(this->get_logger(), "✅ Robot reached FAKE HOME position");
+                
+                auto message = checkers_msgs::msg::RobotMove();
+                message.robot_move_done = true;
+                robotMovePub->publish(message);
+                
+                // Prepare next trajectory if available
+                if(static_cast<std::size_t>(target_pose_index) < targetPositions.size() && target_pose_index >= 0) {
+                    trajectory_list = getPoseList(targetPositions[target_pose_index]);
+                    RCLCPP_INFO(this->get_logger(), "📋 Prepared trajectory for next move");
+                }
+            });
+        }
+        return;
+    }
+    
+    // Resume movement to the last target pose if we have a valid one
+    if (hasValidTargetPose.load()) {
+        RCLCPP_INFO(this->get_logger(), "Resuming to target: [%f, %f, %f]",
+                    target_pose.position.x, target_pose.position.y, target_pose.position.z);
+        moveInThread(target_pose);
+    } else {
+        RCLCPP_WARN(this->get_logger(), "No valid target pose to resume to");
+    }
 }
 
 void RobotControlNode::handle_resume_movement(
     const std::shared_ptr<checkers_msgs::srv::ResumeMovement::Request> request,
     std::shared_ptr<checkers_msgs::srv::ResumeMovement::Response> response) {
-    isStop = false;
-    RCLCPP_INFO(this->get_logger(), "Resuming robot movement.");
-    response->success = true;
-    moveInThread(target_pose);
+    (void)request;  // Suppress unused parameter warning
+    RCLCPP_INFO(this->get_logger(), "Resume movement service called.");
+    
+    if (isStop.load()) {
+        continue_move();
+        response->success = true;
+        RCLCPP_INFO(this->get_logger(), "Robot movement resumed");
+    } else {
+        response->success = false;
+        RCLCPP_WARN(this->get_logger(), "Robot was not stopped - nothing to resume");
+    }
 }
 
 void RobotControlNode::ros_out_callback(const rcl_interfaces::msg::Log::SharedPtr msg) {
-    if(isRobotMoving) {
+    if(isRobotMoving.load()) {
         if (msg->msg.find("Goal reached, success!") != std::string::npos ||
             msg->msg.find("Controller 'joint_trajectory_controller' successfully finished") != std::string::npos ||
             msg->msg.find("Completed trajectory execution with status SUCCEEDED") != std::string::npos ||
@@ -553,7 +810,7 @@ void RobotControlNode::ros_out_callback(const rcl_interfaces::msg::Log::SharedPt
             msg->msg.find("Plan and Execute request complete!") != std::string::npos ||
             msg->msg.find("Movement successful!") != std::string::npos)
         {
-            isRobotMoving = false;
+            isRobotMoving.store(false);
             
             if(isRobotSendingHome) {
                 fileIndex++;
@@ -595,11 +852,10 @@ void RobotControlNode::palm_position_lm_callback(const geometry_msgs::msg::Vecto
 
     double distance = calculate_palm_LM_distance_to_tool0(palm_point.point);
     
-    if(distance < 0.275 && isRobotMoving) {
+    if(distance < 0.275 && isRobotMoving.load() && !isStop.load()) {
         stop();
-    } else if(isStop){
-        isStop = false;
-        moveInThread(target_pose);
+    } else if(isStop.load() && distance >= 0.275) {
+        continue_move();
     }
 }
 
@@ -610,7 +866,7 @@ double RobotControlNode::calculate_palm_LM_distance_to_tool0(const geometry_msgs
         std::pow((currentPosition.position.z - 0.013) - palm_point.z, 2)
     );
 
-    if(isRobotMoving && !isStop) {
+    if(isRobotMoving.load() && !isStop.load()) {
         std::ofstream outfile;
         outfile.open("/home/collab/amavet_ws/src/robot_control/src/" + currentFileName, std::ios_base::app);
         if (outfile.is_open()) {
@@ -620,7 +876,7 @@ double RobotControlNode::calculate_palm_LM_distance_to_tool0(const geometry_msgs
                     << palm_point.x << ","
                     << palm_point.y << ","
                     << palm_point.z << ","
-                    << (distance < 0.275 && isRobotMoving ? distance : 0) << std::endl;
+                    << (distance < 0.275 && isRobotMoving.load() ? distance : 0) << std::endl;
             outfile.close();
         }
     }
@@ -629,20 +885,20 @@ double RobotControlNode::calculate_palm_LM_distance_to_tool0(const geometry_msgs
 }
 
 void RobotControlNode::hand_detected_callback(const checkers_msgs::msg::HandDetected::SharedPtr msg) {
-    if(isRobotMoving) {
+    (void)msg;  // Suppress unused parameter warning
+    if(isRobotMoving.load() && !isStop.load()) {
         stop();
     }
 }
 
 void RobotControlNode::hand_detected_lm_callback(const leap_gesture_interface::msg::LeapFrame::SharedPtr msg) {
     
-    if(msg->n_hands > 0 && isRobotMoving) {
+    if(msg->n_hands > 0 && isRobotMoving.load() && !isStop.load()) {
         stop();
     }
-    else if(msg->n_hands == 0 && isStop){
-        isStop = false;
+    else if(msg->n_hands == 0 && isStop.load()) {
+        continue_move();
     }
-    // Implementation if needed
 }
 
 void RobotControlNode::abortAndClearMovement() {
@@ -653,7 +909,7 @@ void RobotControlNode::abortAndClearMovement() {
     
     // Stop current movement via MoveIt
     if (pose_utility_ && pose_utility_->isInitialized()) {
-        // MoveGroup stop will be handled by the abort flag
+        pose_utility_->stopMovement();
     }
     
     // Wait for movement thread to finish
@@ -662,8 +918,11 @@ void RobotControlNode::abortAndClearMovement() {
     }
     
     // Clear state
-    isRobotMoving = false;
-    isStop = false;
+    isRobotMoving.store(false);
+    isStop.store(false);
+    hasValidTargetPose.store(false);
+    isRobotSendingHome.store(false);
+    isFinalHome.store(false);
     doingTask = false;
     abortCurrentMovement.store(false);
     
@@ -686,7 +945,7 @@ void RobotControlNode::checkers_move_callback(const checkers_msgs::msg::Move::Sh
     }
     
     // ABORT current movement if robot is moving
-    if (isRobotMoving || !targetPositions.empty()) {
+    if (isRobotMoving.load() || !targetPositions.empty()) {
         abortAndClearMovement();
     }
     
