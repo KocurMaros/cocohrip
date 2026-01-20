@@ -134,10 +134,14 @@ private:
     std::string whiteColorString = "white";
     std::string redColorString = "red";
     
-    bool isRobotMoving = false;
-    bool isStop = false;
-    bool isRobotSendingHome = false;
+    std::atomic<bool> isRobotMoving{false};
+    std::atomic<bool> isStop{false};
+    std::atomic<bool> hasValidTargetPose{false};  // Track if target_pose is valid
+    std::atomic<bool> isRobotSendingHome{false};  // Track if doing HOME movement
+    std::atomic<bool> isFinalHome{false};        // Track if this is the final HOME (uses moveToNamedTarget)
+    geometry_msgs::msg::Pose homePose;           // Store HOME target pose for resumption
     std::unique_ptr<std::thread> moveThread;
+    std::mutex moveMutex;  // Mutex for movement operations
     int removedPiecesCount = 0;
 
     std::shared_ptr<tf2_ros::Buffer> tf_buffer;

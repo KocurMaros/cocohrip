@@ -89,6 +89,22 @@ public:
     void setAccelerationScaling(double factor);
 
     /**
+     * @brief Stop current movement immediately
+     * This will halt the robot at its current position
+     */
+    void stopMovement();
+
+    /**
+     * @brief Check if stop was requested
+     */
+    bool isStopRequested() const { return stop_requested_.load(); }
+    
+    /**
+     * @brief Clear the stop request flag (call before starting new movement)
+     */
+    void clearStopRequest() { stop_requested_.store(false); }
+
+    /**
      * @brief Check if the utility is initialized
      */
     bool isInitialized() const { return initialized_; }
@@ -105,6 +121,8 @@ private:
     std::shared_ptr<robot_model_loader::RobotModelLoader> robot_model_loader_;
     moveit::core::RobotModelPtr robot_model_;
     moveit::core::RobotStatePtr robot_state_;
+    
+    std::atomic<bool> stop_requested_{false};  // Flag to signal stop request
     
     rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_state_sub_;
     sensor_msgs::msg::JointState::SharedPtr latest_joint_state_;
