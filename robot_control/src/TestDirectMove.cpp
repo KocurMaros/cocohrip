@@ -27,12 +27,12 @@ int main(int argc, char** argv)
     
     // Real-world measured board corners (center of corner squares)
     // Closest to robot (bottom-right corner)
-    float corner_near_x = 0.8736;
-    float corner_near_y = 0.4882+0.01;
+    float corner_near_x = 0.8736+0.02+(0.0005*2);
+    float corner_near_y = 0.4882+0.01-0.015;
     
     // Farthest from robot (top-left corner)
-    float corner_far_x = 0.4711;
-    float corner_far_y = 0.0866+0.01;
+    float corner_far_x = 0.4711+0.02+(0.0005*2);
+    float corner_far_y = 0.0866+0.01-0.015;
     
     // Calculate other two corners
     // Bottom-left corner (near Y, far X)

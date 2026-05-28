@@ -51,13 +51,20 @@ RobotControlNode::RobotControlNode()
 
     // Real-world measured board corners (center of corner squares)
     // Closest to robot (bottom-right corner at position 7,7)
-    float corner_near_x = 0.8736;
-    float corner_near_y = 0.4882+0.01;
+    //float corner_near_x = 0.8736;
+    //float corner_near_y = 0.4882+0.01;
     
     // Farthest from robot (top-left corner at position 0,0)
-    float corner_far_x = 0.4711;
-    float corner_far_y = 0.0866+0.01;
+    //float corner_far_x = 0.4711;
+    //float corner_far_y = 0.0866+0.01;
     
+    float corner_near_x = 0.8736+0.02+(0.0005*2);
+    float corner_near_y = 0.4882+0.01-0.015;
+    
+    // Farthest from robot (top-left corner)
+    float corner_far_x = 0.4711+0.02+(0.0005*2);
+    float corner_far_y = 0.0866+0.01-0.015;
+
     // Calculate square size from measured corners
     square_size = (corner_near_x - corner_far_x) / 7.0;  // Distance across 7 squares
     
