@@ -75,12 +75,15 @@ RobotControlNode::RobotControlNode()
     // Z heights, expressed in the TCP (gripper fingertip) frame now that the
     // gripper is part of the kinematic chain (see robotiq_hande_description's
     // robotiq_hande_gripper.xacro) and pose_utility_ targets "ur5e_robotiq_hande_end"
-    // instead of the bare flange. The
-    // right-hand side of each line is the OLD flange-frame value (tuned by
-    // hand while the gripper was invisible to the planner); subtracting
-    // kHandeFlangeToTcp recovers the real physical height so behavior is
-    // unchanged until kHandeFlangeToTcp itself is re-measured on hardware.
-    zAttach = 0.155 - kHandeFlangeToTcp;          // was: end effector offset - minimum safe height
+    // instead of the bare flange. For the clearance heights below, the right-hand
+    // side is the OLD flange-frame value (tuned while the gripper was invisible to
+    // the planner) minus kHandeFlangeToTcp, so the flange travels as high as before.
+    // Grasp height is measured directly, not converted from the old flange value:
+    // (0.155 - 0.0107) - kHandeFlangeToTcp lands ~2 mm inside the table model (top at
+    // z ~ -0.010), so the old number wasn't pure gripper length. Default is the board
+    // surface implied by createPiece() (piece spans z 0.005..0.010); tune on the robot
+    // by touching a piece and reading `tf2_echo world ur5e_robotiq_hande_end`.
+    zAttach = this->declare_parameter<double>("z_attach", 0.005);
     zMoving = 0.20 - kHandeFlangeToTcp;           // was: raised to 20cm to avoid hitting pieces
     zSafeTransition = 0.25 - kHandeFlangeToTcp;   // was: safe transition height between squares
     
@@ -1138,7 +1141,7 @@ std::vector<std::pair<geometry_msgs::msg::Pose, Task>> RobotControlNode::getPose
     pose2.orientation.w = -0.00023792324645910412;
     pose2.position.x = posX;
     pose2.position.y = posY;
-    pose2.position.z = zAttach - 0.0107;
+    pose2.position.z = zAttach;
     // Gripper task happens HERE at the lowest point, after reaching position
     poses.push_back(std::make_pair(pose2, mission.task));
 

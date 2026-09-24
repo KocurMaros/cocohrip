@@ -132,7 +132,7 @@ private:
     float square_size;      // Calculated from corner measurements
     float boardOffsetX;     // X position of square (0,0) center
     float boardOffsetY;     // Y position of square (0,0) center
-    float zAttach;          // Height for attaching pieces (TCP-frame contact height, see kHandeFlangeToTcp)
+    float zAttach;          // TCP (fingertip) height when grasping; ROS parameter "z_attach"
     float zMoving;          // Safe height for moving above board
     float zMoveOffset;      // Movement offset after placing / grasping a checker
     float zSafeTransition;  // Safe transition height for movements between squares
