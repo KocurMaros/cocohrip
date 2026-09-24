@@ -1,14 +1,25 @@
+import json
+import os
+import sys
+from datetime import datetime
+
 import cv2
 from matplotlib.pyplot import imshow
 from checkers_game.camera.ximea_camera import XimeaCamera
+from checkers_game.camera import board_geometry
 import numpy as np
 import copy
-import sys
 from checkers_game.checkers.piece import Piece
 from checkers_game.constants import BLACK, ROWS, RED, SQUARE_SIZE, COLS, WHITE, GREY, BROWN
 
 # Debug mode - set to True to show additional windows for debugging
 DEBUG_MODE = True  # Enabled for debugging auto-detection
+
+# Where the last verified board calibration (corners) is cached, so a fixed
+# camera mount doesn't need full corner detection (auto or manual) redone
+# every session - see BoardDetection._resolve_board_corners().
+CALIBRATION_DIR = os.path.expanduser("~/.cocohrip")
+CALIBRATION_PATH = os.path.join(CALIBRATION_DIR, "board_calibration.json")
 
 def log(msg):
     """Print with immediate flush so output appears in terminal right away"""
@@ -20,27 +31,17 @@ class BoardDetection:
     def __init__(self, ximeaCamera):
         self.ximeaCamera = ximeaCamera
         self._init()
-        
+
 
     def _init(self):
         # 1. Camera Adjustment Phase
         self._camera_adjustment_window()
 
-        # 2. Board Corner Detection (AUTO)
-        log("\nAttempting automatic board detection...")
-        auto_corners, auto_success_reason = self._auto_detect_corners()
-        
-        if auto_corners is not None:
-            self.bounderies = auto_corners
-            log("✓ Automatic detection successful!")
-            log(f"  → {auto_success_reason}")
-            
-            # 2b. Verify and adjust corners if needed
-            self.bounderies = self._verify_and_adjust_corners(self.bounderies)
-        else:
-            log("⚠ Automatic detection failed. Falling back to manual selection.")
-            self.bounderies = self._get_trim_param_manual()
-            
+        # 2. Board Corner Detection - reuse a cached calibration when one
+        # exists for this camera resolution, otherwise auto-detect, and
+        # fall back to manual clicking if that fails too.
+        self.bounderies = self._resolve_board_corners()
+
         # 3. Auto-detect piece thresholds based on 12 black + 12 white pieces
         # Then show settings window with detected values for user adjustment
         log("\nAuto-detecting piece color thresholds...")
@@ -70,300 +71,121 @@ class BoardDetection:
         self.is_initialized = False
         self.selected_difficulty = 3
 
+    def _resolve_board_corners(self):
+        """
+        Get the board's 4 corners (BL, TL, TR, BR - see board_geometry.py),
+        preferring a cached calibration from a previous run over redoing
+        detection, since the camera is rigidly mounted and the corners
+        rarely change between sessions. Falls back to automatic detection,
+        then manual clicking, exactly like before if there is no usable
+        cache.
+        """
+        image = self.ximeaCamera.get_camera_image()
+        image_shape = image.shape if image is not None else None
+
+        cached = self._load_cached_calibration(image_shape)
+        if cached is not None:
+            log("\n" + "="*60)
+            log("USING CACHED BOARD CALIBRATION")
+            log("="*60)
+            log("  → Grid should already line up with the squares.")
+            log("  → SPACE to accept, or 'R' to recalibrate from scratch.")
+            corners = self._verify_and_adjust_corners(cached)
+            self._save_calibration(corners, image_shape)
+            return corners
+
+        log("\nAttempting automatic board detection...")
+        auto_corners, auto_success_reason = self._auto_detect_corners()
+
+        if auto_corners is not None:
+            log("✓ Automatic detection successful!")
+            log(f"  → {auto_success_reason}")
+            corners = self._verify_and_adjust_corners(auto_corners)
+        else:
+            log("⚠ Automatic detection failed. Falling back to manual selection.")
+            corners = self._get_trim_param_manual()
+
+        self._save_calibration(corners, image_shape)
+        return corners
+
+    def _load_cached_calibration(self, image_shape):
+        """Return cached corners (np.float32, shape (4,2)) if a valid cache
+        exists for the given camera image shape, else None.
+        """
+        if not os.path.exists(CALIBRATION_PATH):
+            return None
+        try:
+            with open(CALIBRATION_PATH, "r") as f:
+                data = json.load(f)
+            corners = np.array(data["corners"], dtype=np.float32)
+            if corners.shape != (4, 2):
+                return None
+            cached_shape = data.get("image_shape")
+            if image_shape is not None and cached_shape is not None:
+                if list(cached_shape[:2]) != list(image_shape[:2]):
+                    log(f"  ⚠ Cached calibration was for a "
+                        f"{cached_shape[1]}x{cached_shape[0]} image, current "
+                        f"camera is {image_shape[1]}x{image_shape[0]} - "
+                        f"ignoring cache.")
+                    return None
+            log(f"  → Found cached calibration from "
+                f"{data.get('saved_at', 'an unknown time')} "
+                f"({CALIBRATION_PATH})")
+            return corners
+        except (OSError, ValueError, KeyError, TypeError) as e:
+            log(f"  ⚠ Could not read cached calibration ({e}), ignoring it.")
+            return None
+
+    def _save_calibration(self, corners, image_shape=None):
+        """Persist verified corners so future runs can skip detection."""
+        if corners is None:
+            return
+        try:
+            os.makedirs(CALIBRATION_DIR, exist_ok=True)
+            data = {
+                "corners": np.asarray(corners, dtype=float).tolist(),
+                "corner_order": list(board_geometry.CORNER_NAMES),
+                "image_shape": list(image_shape) if image_shape is not None else None,
+                "saved_at": datetime.now().isoformat(timespec="seconds"),
+            }
+            with open(CALIBRATION_PATH, "w") as f:
+                json.dump(data, f, indent=2)
+            log(f"  → Calibration saved to {CALIBRATION_PATH}")
+        except OSError as e:
+            log(f"  ⚠ Could not save calibration ({e})")
+
     def _auto_detect_corners(self):
         """
-        Automatically detect the board corners using multiple detection strategies.
-        Shows visual feedback during detection.
-        
+        Automatically detect the board corners: dominant-line clustering for
+        a coarse quad, then perspective-rectify and snap to the true inner
+        grid boundary via 8x8 periodicity matching. See board_geometry.py
+        for the full algorithm and its own standalone tests.
+
         Returns: (corners, reason_message) or (None, failure_reason)
         """
         log("\n" + "="*60)
         log("AUTO-DETECTING BOARD CORNERS")
         log("="*60)
-        
-        # Get image
+
         image = self.ximeaCamera.get_camera_image()
         if image is None:
             log("  ✗ FAILED: Could not get camera image")
             return None, "Camera image unavailable"
-        
+
         log(f"  → Image size: {image.shape[1]}x{image.shape[0]}")
-        
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        h, w = gray.shape
-        min_board_area = (min(h, w) * 0.2) ** 2  # Board should be at least 20% of image
-        log(f"  → Minimum board area: {min_board_area:.0f} pixels")
-        
-        # Show the image we're analyzing
-        debug_image = image.copy()
-        cv2.putText(debug_image, "Detecting board...", (20, 40), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        cv2.imshow("Auto Detection", debug_image)
-        cv2.waitKey(100)  # Brief pause to show image
-        
-        # Strategy 1: Find largest quadrilateral contour
-        board_cnt = None
-        largest_area = 0
-        used_method = None
-        all_quads_found = []
-        all_large_contours = []
-        
-        methods = [
-            ("Adaptive Gaussian", lambda: cv2.adaptiveThreshold(
-                cv2.GaussianBlur(gray, (5, 5), 0), 255, 
-                cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)),
-            ("Otsu Inv", lambda: cv2.threshold(
-                cv2.GaussianBlur(gray, (5, 5), 0), 0, 255, 
-                cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]),
-            ("Otsu Normal", lambda: cv2.threshold(
-                cv2.GaussianBlur(gray, (5, 5), 0), 0, 255, 
-                cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]),
-            ("Canny Soft", lambda: cv2.dilate(
-                cv2.Canny(cv2.GaussianBlur(gray, (5, 5), 0), 30, 100), 
-                np.ones((5,5), np.uint8), iterations=2)),
-            ("Canny Strong", lambda: cv2.dilate(
-                cv2.Canny(cv2.GaussianBlur(gray, (7, 7), 0), 50, 150), 
-                np.ones((7,7), np.uint8), iterations=3)),
-            ("Morph Close", lambda: cv2.morphologyEx(
-                cv2.threshold(cv2.GaussianBlur(gray, (5, 5), 0), 0, 255, 
-                cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1],
-                cv2.MORPH_CLOSE, np.ones((15,15), np.uint8))),
-        ]
-        
-        for method_name, threshold_func in methods:
-            try:
-                thresh = threshold_func()
-                
-                # Show threshold result briefly
-                cv2.imshow("Threshold Debug", thresh)
-                cv2.waitKey(50)
-                
-                # Try both external and tree contour retrieval
-                for mode_name, mode in [("EXTERNAL", cv2.RETR_EXTERNAL), ("TREE", cv2.RETR_TREE)]:
-                    contours, _ = cv2.findContours(thresh, mode, cv2.CHAIN_APPROX_SIMPLE)
-                    
-                    log(f"  → {method_name} ({mode_name}): {len(contours)} contours")
-                    
-                    # Draw all contours on debug image
-                    contour_debug = image.copy()
-                    
-                    quad_count = 0
-                    for cnt in contours:
-                        area = cv2.contourArea(cnt)
-                        
-                        # Track all large contours for debugging
-                        if area > 10000:
-                            peri = cv2.arcLength(cnt, True)
-                            approx = cv2.approxPolyDP(cnt, 0.02 * peri, True)
-                            all_large_contours.append((method_name, area, len(approx)))
-                            
-                            # Draw this contour
-                            color = (0, 255, 0) if len(approx) == 4 else (0, 0, 255)
-                            cv2.drawContours(contour_debug, [approx], -1, color, 2)
-                            cv2.putText(contour_debug, f"{len(approx)}pts", 
-                                       (int(cnt[0][0][0]), int(cnt[0][0][1])),
-                                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
-                        
-                        if area < min_board_area:
-                            continue
-                        
-                        peri = cv2.arcLength(cnt, True)
-                        # Try different approximation factors
-                        for eps_factor in [0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.08, 0.1]:
-                            approx = cv2.approxPolyDP(cnt, eps_factor * peri, True)
-                            
-                            if len(approx) == 4:
-                                quad_count += 1
-                                all_quads_found.append((method_name, mode_name, area, approx, eps_factor))
-                                
-                                if area > largest_area:
-                                    largest_area = area
-                                    board_cnt = approx
-                                    used_method = f"{method_name} ({mode_name}, eps={eps_factor})"
-                                break  # Found a quad for this contour
-                    
-                    # Show contour debug
-                    cv2.putText(contour_debug, f"{method_name}: {quad_count} quads found", 
-                               (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
-                    cv2.imshow("Contour Detection", contour_debug)
-                    cv2.waitKey(50)
-                    
-                    if quad_count > 0:
-                        log(f"    → Found {quad_count} quadrilaterals, largest: {largest_area:.0f}")
-                        
-            except Exception as e:
-                log(f"  → Method '{method_name}' failed: {e}")
-                continue
-        
-        # Log large contours found
-        if len(all_large_contours) > 0:
-            log(f"\n  Large contours found (area > 10000):")
-            for m, a, pts in sorted(all_large_contours, key=lambda x: -x[1])[:10]:
-                log(f"    - {m}: area={a:.0f}, vertices={pts}")
-        
-        # Strategy 2: If no quad found, try to find the checkerboard pattern
-        if board_cnt is None:
-            log("  → No quad found, trying checkerboard pattern...")
-            for grid_size in [(7, 7), (6, 6), (5, 5)]:
-                ret, corners_chess = cv2.findChessboardCorners(gray, grid_size, None)
-                if ret:
-                    log(f"  → Found checkerboard pattern {grid_size}!")
-                    corners_chess = corners_chess.reshape(-1, 2)
-                    x_min, y_min = corners_chess.min(axis=0)
-                    x_max, y_max = corners_chess.max(axis=0)
-                    
-                    margin_x = (x_max - x_min) / grid_size[0]
-                    margin_y = (y_max - y_min) / grid_size[1]
-                    
-                    board_cnt = np.array([
-                        [[x_min - margin_x, y_min - margin_y]],
-                        [[x_max + margin_x, y_min - margin_y]],
-                        [[x_max + margin_x, y_max + margin_y]],
-                        [[x_min - margin_x, y_max + margin_y]]
-                    ], dtype=np.float32)
-                    used_method = f"Checkerboard {grid_size}"
-                    largest_area = (x_max - x_min + 2*margin_x) * (y_max - y_min + 2*margin_y)
-                    break
-        
-        cv2.destroyWindow("Threshold Debug")
-        cv2.destroyWindow("Contour Detection")
-        cv2.destroyWindow("Auto Detection")
-        
-        if board_cnt is None:
-            log("\n  ✗ FAILED: No quadrilateral contour found")
-            log("    Diagnostic info:")
-            log(f"    - Image size: {w}x{h}")
-            log(f"    - Min board area threshold: {min_board_area:.0f} pixels")
-            log(f"    - Total quads found: {len(all_quads_found)}")
-            log(f"    - Total large contours: {len(all_large_contours)}")
-            
-            if len(all_quads_found) > 0:
-                log(f"    - Largest quad area: {max(q[2] for q in all_quads_found):.0f}")
-            
-            log("\n    Possible reasons:")
-            log("    - Board edges blend with background/table")
-            log("    - No clear border around the board")
-            log("    - Try adding a dark border around the board")
-            log("\n    → Falling back to manual selection...")
-            
-            return None, "No board contour detected"
-        
-        log(f"\n  ✓ Found board using '{used_method}'")
-        log(f"    Area: {largest_area:.0f} pixels")
-        
-        # Reshape to 4x2
-        pts = board_cnt.reshape(4, 2).astype(np.float32)
-        
-        # Sort points: TL, TR, BR, BL
-        rect = np.zeros((4, 2), dtype="float32")
-        
-        s = pts.sum(axis=1)
-        rect[0] = pts[np.argmin(s)]  # TL
-        rect[2] = pts[np.argmax(s)]  # BR
 
-        diff = np.diff(pts, axis=1).flatten()
-        rect[1] = pts[np.argmin(diff)]  # TR
-        rect[3] = pts[np.argmax(diff)]  # BL
-        
-        # Orient the corners based on piece detection
-        rect, orient_success, orient_reason = self._orient_corners(rect, image)
-        
-        if not orient_success:
-            log(f"  ⚠ Orientation detection uncertain: {orient_reason}")
-            log("    → Using geometric orientation, may need manual rotation")
-        
-        return rect, orient_reason
+        corners, message = board_geometry.find_board_corners(image)
 
-    def _orient_corners(self, corners, image):
-        """
-        Check all 4 rotations of the corners to find the one that matches 
-        the expected board setup:
-        TL: White empty square (Low Variance)
-        TR: Black square with BLACK piece (Medium Variance)
-        BR: White empty square (Low Variance)
-        BL: Black square with WHITE piece (High Variance - white pieces are brighter)
-        
-        Returns: (best_corners, success, reason_message)
-        """
-        best_corners = corners.copy()
-        best_score = float('inf')
-        best_rotation = 0
-        variances_log = []
-        
-        for rotation in range(4):
-            # Warp to inspect corners
-            warped = self._trim_image_perspective(image, corners)
-            
-            if warped is None or warped.shape[0] < 800 or warped.shape[1] < 800:
-                corners = np.roll(corners, 1, axis=0)
-                continue
-            
-            # Extract corner ROIs (from the 100x100 corner squares)
-            margin = 15
-            size = 70
-            
-            roi_tl = warped[margin:margin+size, margin:margin+size]
-            roi_tr = warped[margin:margin+size, 800-margin-size:800-margin]
-            roi_br = warped[800-margin-size:800-margin, 800-margin-size:800-margin]
-            roi_bl = warped[800-margin-size:800-margin, margin:margin+size]
-            
-            v_tl = self._calculate_variance(roi_tl)
-            v_tr = self._calculate_variance(roi_tr)
-            v_br = self._calculate_variance(roi_br)
-            v_bl = self._calculate_variance(roi_bl)
-            
-            variances_log.append({
-                'rotation': rotation,
-                'TL': v_tl, 'TR': v_tr, 'BR': v_br, 'BL': v_bl
-            })
-            
-            # Score the orientation:
-            # - TL and BR should be empty (low variance)
-            # - TR should have black piece (medium variance)
-            # - BL should have white piece (highest variance)
-            score = 0
-            
-            # TL and BR should be the lowest (empty squares)
-            score += v_tl + v_br
-            
-            # TR must be higher than TL (has piece)
-            if v_tr <= v_tl * 1.5:
-                score += 5000  # Penalty: TR should have a piece
-            
-            # BL must be higher than TL (has piece)
-            if v_bl <= v_tl * 1.5:
-                score += 5000  # Penalty: BL should have a piece
-            
-            # BL (white piece) should be higher variance than TR (black piece)
-            if v_bl <= v_tr:
-                score += 3000  # Penalty: white should be brighter/higher variance than black
-            
-            # Additional check: TR and BL must be significantly higher than empty
-            if v_tr < 200 or v_bl < 200:
-                score += 10000  # Both corners should have pieces
-            
-            if score < best_score:
-                best_score = score
-                best_corners = corners.copy()
-                best_rotation = rotation
-            
-            # Rotate corners for next iteration
-            corners = np.roll(corners, 1, axis=0)
-        
-        # Log variance analysis
-        log(f"  → Corner variance analysis:")
-        for v in variances_log:
-            marker = " ← SELECTED" if v['rotation'] == best_rotation else ""
-            log(f"    Rotation {v['rotation']}: TL={v['TL']:.0f}, TR={v['TR']:.0f}, BR={v['BR']:.0f}, BL={v['BL']:.0f}{marker}")
-        
-        # Determine success
-        success = best_score < 5000
-        if success:
-            reason = f"Orientation found (rotation={best_rotation}, score={best_score:.0f})"
-        else:
-            reason = f"Uncertain orientation (rotation={best_rotation}, score={best_score:.0f}) - corner variances may not match expected pattern"
-        
-        return best_corners, success, reason
+        if corners is None:
+            log(f"  ✗ FAILED: {message}")
+            log("    → Falling back to manual selection...")
+            return None, message
+
+        log(f"  ✓ Found board corners ({message})")
+        for name, (x, y) in zip(board_geometry.CORNER_NAMES, corners):
+            log(f"    {name}: ({x:.0f}, {y:.0f})")
+
+        return corners, message
 
     def _verify_and_adjust_corners(self, corners):
         """
@@ -382,13 +204,13 @@ class BoardDetection:
         log("Controls:")
         log("  SPACE/ENTER - Accept corners if grid looks good")
         log("  R - Reset and manually select new corners")
-        log("  1/2/3/4 - Select corner to adjust (TL/TR/BR/BL)")
+        log("  1/2/3/4 - Select corner to adjust (BL/TL/TR/BR)")
         log("  Click - Set new position for selected corner")
         log("-" * 60 + "\n")
-        
+
         current_corners = corners.copy()
-        selected_corner = None  # None, 0, 1, 2, 3 for TL, TR, BR, BL
-        corner_names = ["TL", "TR", "BR", "BL"]
+        selected_corner = None  # None, 0, 1, 2, 3 for BL, TL, TR, BR
+        corner_names = list(board_geometry.CORNER_NAMES)
         
         def mouse_callback(event, x, y, flags, param):
             nonlocal current_corners, selected_corner
@@ -479,16 +301,16 @@ class BoardDetection:
             # Select corner to adjust
             if key == ord('1'):
                 selected_corner = 0
-                log(f"  → Selected corner 1 (TL) - click to move")
+                log(f"  → Selected corner 1 ({corner_names[0]}) - click to move")
             elif key == ord('2'):
                 selected_corner = 1
-                log(f"  → Selected corner 2 (TR) - click to move")
+                log(f"  → Selected corner 2 ({corner_names[1]}) - click to move")
             elif key == ord('3'):
                 selected_corner = 2
-                log(f"  → Selected corner 3 (BR) - click to move")
+                log(f"  → Selected corner 3 ({corner_names[2]}) - click to move")
             elif key == ord('4'):
                 selected_corner = 3
-                log(f"  → Selected corner 4 (BL) - click to move")
+                log(f"  → Selected corner 4 ({corner_names[3]}) - click to move")
             
             # ESC to cancel
             if key == 27:
@@ -1014,11 +836,13 @@ class BoardDetection:
 
     def _get_trim_param_manual(self):
         """
-        Manual board corner selection - click 4 corners in order:
-        1. White square on black side (Top-Left)
-        2. Black square with black piece (Top-Right)
-        3. White square on white side (Bottom-Right)
-        4. White piece on black square (Bottom-Left)
+        Manual board corner selection - click 4 corners in order, on the
+        inner edge of the frame (right where the squares start), not the
+        outer edge of the board:
+        1. Bottom-Left
+        2. Top-Left
+        3. Top-Right
+        4. Bottom-Right
         """
         corners = []
         clone = None
@@ -1050,11 +874,12 @@ class BoardDetection:
         print("\n" + "="*60)
         print("STEP 1: BOARD CORNER SELECTION")
         print("="*60)
-        print("Click on the 4 corners of the board in this order:")
-        print("  1. White square on black side (Top-Left)")
-        print("  2. Black square with black piece (Top-Right)")
-        print("  3. White square on white side (Bottom-Right)")
-        print("  4. White piece on black square (Bottom-Left)")
+        print("Click on the 4 corners of the board, on the inner edge of the")
+        print("frame (right where the squares start), in this order:")
+        print("  1. Bottom-Left")
+        print("  2. Top-Left")
+        print("  3. Top-Right")
+        print("  4. Bottom-Right")
         print("\nControls:")
         print("  SPACE - Confirm selection")
         print("  R     - Reset points")
@@ -1104,24 +929,28 @@ class BoardDetection:
 
     def _trim_image_perspective(self, image, corners):
         """
-        Apply perspective transform to get top-down view of the board
+        Apply perspective transform to get top-down view of the board.
+
+        `corners` is in BL, TL, TR, BR order (see board_geometry.py).
         """
         if corners is None or len(corners) != 4:
             return image
-        
+
         # Define the output size (you can adjust this)
         board_size = 800  # 800x800 pixel output
-        
-        # Define destination points for perspective transform
+
+        # Define destination points for perspective transform, matching the
+        # BL, TL, TR, BR corner order.
         dst_points = np.array([
-            [0, 0],
-            [board_size, 0],
-            [board_size, board_size],
-            [0, board_size]
+            [0, board_size],           # BL
+            [0, 0],                    # TL
+            [board_size, 0],           # TR
+            [board_size, board_size],  # BR
         ], dtype=np.float32)
-        
+
         # Calculate perspective transform matrix
-        matrix = cv2.getPerspectiveTransform(corners, dst_points)
+        matrix = cv2.getPerspectiveTransform(
+            np.asarray(corners, dtype=np.float32), dst_points)
         
         # Apply perspective transform
         warped = cv2.warpPerspective(image, matrix, (board_size, board_size))
