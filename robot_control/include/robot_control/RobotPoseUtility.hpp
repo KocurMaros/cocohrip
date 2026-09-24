@@ -29,13 +29,14 @@ public:
      * @brief Constructor
      * @param node Shared pointer to the ROS2 node
      * @param planning_group Name of the MoveIt planning group (default: "ur5e_arm")
-     * @param end_effector_link Name of the end effector link (default: "ur5e_tcp", the Hand-E
-     *        gripper's TCP frame - see cocohrip_description/urdf/hande_gripper.xacro)
+     * @param end_effector_link Name of the end effector link (default: "ur5e_robotiq_hande_end", the
+     *        Hand-E gripper's fingertip frame - see robotiq_hande_description's
+     *        robotiq_hande_gripper.xacro)
      */
     RobotPoseUtility(
         std::shared_ptr<rclcpp::Node> node,
         const std::string& planning_group = "ur5e_arm",
-        const std::string& end_effector_link = "ur5e_tcp"
+        const std::string& end_effector_link = "ur5e_robotiq_hande_end"
     );
 
     /**

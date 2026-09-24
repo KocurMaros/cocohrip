@@ -17,7 +17,7 @@ int main(int argc, char** argv)
     auto robot_util = std::make_shared<RobotPoseUtility>(
         node,
         "ur5e_arm",
-        "ur5e_tcp"
+        "ur5e_robotiq_hande_end"
     );
     
     if (!robot_util->initialize()) {

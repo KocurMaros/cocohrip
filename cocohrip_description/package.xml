@@ -15,6 +15,7 @@
   <exec_depend>xacro</exec_depend>
   <exec_depend>ur_description</exec_depend>
   <exec_depend>ur_robot_driver</exec_depend>
+  <exec_depend>robotiq_hande_description</exec_depend>
 
 
   <export>

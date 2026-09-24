@@ -73,8 +73,9 @@ RobotControlNode::RobotControlNode()
     boardOffsetY = corner_far_y;
     
     // Z heights, expressed in the TCP (gripper fingertip) frame now that the
-    // gripper is part of the kinematic chain (see hande_gripper.xacro) and
-    // pose_utility_ targets "ur5e_tcp" instead of the bare flange. The
+    // gripper is part of the kinematic chain (see robotiq_hande_description's
+    // robotiq_hande_gripper.xacro) and pose_utility_ targets "ur5e_robotiq_hande_end"
+    // instead of the bare flange. The
     // right-hand side of each line is the OLD flange-frame value (tuned by
     // hand while the gripper was invisible to the planner); subtracting
     // kHandeFlangeToTcp recovers the real physical height so behavior is
@@ -101,7 +102,7 @@ void RobotControlNode::initMoveGroup() {
     pose_utility_ = std::make_shared<RobotPoseUtility>(
         shared_from_this(),
         "ur5e_arm",
-        "ur5e_tcp"
+        "ur5e_robotiq_hande_end"
     );
 
     if (!pose_utility_->initialize()) {
