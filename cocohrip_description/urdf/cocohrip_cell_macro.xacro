@@ -1,6 +1,7 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://ros.org/wiki/xacro">
   <xacro:include filename="$(find ur_description)/urdf/ur_macro.xacro"/>
+  <xacro:include filename="$(find cocohrip_description)/urdf/hande_gripper.xacro"/>
 
   <xacro:macro name="cocohrip_cell" params="
     parent
@@ -72,6 +73,12 @@
     >
       <origin xyz="0 0 0" rpy="0 0 0" />
     </xacro:ur_robot>
+
+    <!--Robotiq Hand-E gripper, fixed to the UR flange (see hande_gripper.xacro)-->
+    <xacro:hande_gripper
+      parent="${ur_type}_tool0"
+      prefix="${ur_type}_"
+    />
   </xacro:macro>
 
 </robot>

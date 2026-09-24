@@ -10,9 +10,7 @@ RobotPoseUtility::RobotPoseUtility(
       planning_group_(planning_group),
       end_effector_link_(end_effector_link),
       joint_state_received_(false),
-      initialized_(false),
-      min_z_offset_(0.16)  // End effector safety offset
-
+      initialized_(false)
 {
     // Subscribe to joint states
     joint_state_sub_ = node_->create_subscription<sensor_msgs::msg::JointState>(
@@ -277,15 +275,6 @@ bool RobotPoseUtility::moveToPose(const geometry_msgs::msg::Pose& target_pose)
     // NOTE: stop_requested_ is NOT cleared here - caller must clear it before starting a movement sequence
     // This allows stop to persist across multiple moveToPose calls in a sequence
     
-    geometry_msgs::msg::Pose adjusted_pose = target_pose;
-    
-    if (adjusted_pose.position.z < min_z_offset_) {
-        RCLCPP_WARN(node_->get_logger(), 
-                    "[RobotPoseUtility] Target Z (%.4f) below minimum (%.4f)! Clamping to minimum.",
-                    adjusted_pose.position.z, min_z_offset_);
-        adjusted_pose.position.z = min_z_offset_;
-    }
-    
     // Check if stop was requested before planning
     if (stop_requested_.load()) {
         RCLCPP_WARN(node_->get_logger(), "[RobotPoseUtility] Stop requested before planning - aborting");
@@ -297,7 +286,7 @@ bool RobotPoseUtility::moveToPose(const geometry_msgs::msg::Pose& target_pose)
                 target_pose.position.x, target_pose.position.y, target_pose.position.z);
     
     // METHOD 1: Try standard pose target planning (most reliable in Jazzy)
-    move_group_->setPoseTarget(adjusted_pose);
+    move_group_->setPoseTarget(target_pose);
     move_group_->setStartStateToCurrentState();
     
     moveit::planning_interface::MoveGroupInterface::Plan plan;

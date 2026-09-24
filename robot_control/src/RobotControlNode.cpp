@@ -72,10 +72,16 @@ RobotControlNode::RobotControlNode()
     boardOffsetX = corner_far_x;
     boardOffsetY = corner_far_y;
     
-    // Z heights
-    zAttach = 0.155;  // End effector offset - minimum safe height
-    zMoving = 0.20;   // Safe moving height above board (raised to 20cm to avoid hitting pieces)
-    zSafeTransition = 0.25;  // Safe transition height for movements between squares (25cm)
+    // Z heights, expressed in the TCP (gripper fingertip) frame now that the
+    // gripper is part of the kinematic chain (see hande_gripper.xacro) and
+    // pose_utility_ targets "ur5e_tcp" instead of the bare flange. The
+    // right-hand side of each line is the OLD flange-frame value (tuned by
+    // hand while the gripper was invisible to the planner); subtracting
+    // kHandeFlangeToTcp recovers the real physical height so behavior is
+    // unchanged until kHandeFlangeToTcp itself is re-measured on hardware.
+    zAttach = 0.155 - kHandeFlangeToTcp;          // was: end effector offset - minimum safe height
+    zMoving = 0.20 - kHandeFlangeToTcp;           // was: raised to 20cm to avoid hitting pieces
+    zSafeTransition = 0.25 - kHandeFlangeToTcp;   // was: safe transition height between squares
     
     RCLCPP_INFO(this->get_logger(), "Board calibration:");
     RCLCPP_INFO(this->get_logger(), "  Calculated square size: %.4f m", square_size);
@@ -95,7 +101,7 @@ void RobotControlNode::initMoveGroup() {
     pose_utility_ = std::make_shared<RobotPoseUtility>(
         shared_from_this(),
         "ur5e_arm",
-        "ur5e_tool0"
+        "ur5e_tcp"
     );
 
     if (!pose_utility_->initialize()) {
@@ -1105,12 +1111,10 @@ std::vector<std::pair<geometry_msgs::msg::Pose, Task>> RobotControlNode::getPose
     // OPTIMIZED: Skip intermediate zMoving pose - go directly from approach to attach
     // Only add zMoving waypoint if we didn't add an approach waypoint (i.e., we're already above target)
     if (!added_approach_waypoint) {
-        // If we are already above target (small horizontal move), still go to safe height (5cm above board = 0.15m)
+        // If we are already above target (small horizontal move), still go to safe height.
         // User requested: "go after taking piece 5 cm above checker board"
-        // Board is at ~0.10m, so 5cm above board is ~0.15m absolute Z
-        // Assuming user means 5cm clearance above pieces which are ~0.15m
-        
-        float zClearance = 0.20; // 20cm absolute height (clearance above pieces)
+        // Same flange-height-to-TCP-height conversion as zAttach/zMoving/zSafeTransition above.
+        float zClearance = 0.20 - kHandeFlangeToTcp; // was: 20cm absolute height (clearance above pieces)
         
         geometry_msgs::msg::Pose above_pose;
         above_pose.orientation.x = -0.0028119066264480352;

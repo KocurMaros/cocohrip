@@ -28,13 +28,14 @@ public:
     /**
      * @brief Constructor
      * @param node Shared pointer to the ROS2 node
-     * @param planning_group Name of the MoveIt planning group (default: "ur_manipulator")
-     * @param end_effector_link Name of the end effector link (default: "tool0")
+     * @param planning_group Name of the MoveIt planning group (default: "ur5e_arm")
+     * @param end_effector_link Name of the end effector link (default: "ur5e_tcp", the Hand-E
+     *        gripper's TCP frame - see cocohrip_description/urdf/hande_gripper.xacro)
      */
     RobotPoseUtility(
         std::shared_ptr<rclcpp::Node> node,
         const std::string& planning_group = "ur5e_arm",
-        const std::string& end_effector_link = "ur5e_tool0"
+        const std::string& end_effector_link = "ur5e_tcp"
     );
 
     /**
@@ -129,7 +130,6 @@ private:
     std::mutex joint_state_mutex_;
     bool joint_state_received_;
     bool initialized_;
-    double min_z_offset_;  // Minimum Z height for end effector safety
 };
 
 #endif // ROBOT_POSE_UTILITY_HPP

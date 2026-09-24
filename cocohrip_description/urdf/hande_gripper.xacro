@@ -1,0 +1,73 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://ros.org/wiki/xacro">
+
+  <!--
+    Robotiq Hand-E gripper, modeled as a single fixed-geometry placeholder
+    (no mesh is available for this gripper + whatever adapter plate it is
+    mounted on). It is attached to the UR flange (tool0) with two fixed
+    joints:
+
+      tool0 -> hande_gripper_link   (box collision/visual, for planning-scene
+                                      collision checking against the table,
+                                      board and pieces)
+      tool0 -> tcp                  (zero-size frame at the real grasp
+                                      point, i.e. where the fingertips close
+                                      on an object)
+
+    Fingers are NOT modeled as separate moving joints: the driver
+    (robotiq_hande_ros2_driver) does not publish joint states for the
+    gripper, so MoveIt has no way to reflect an actuated stroke anyway. This
+    is sufficient for what we need it for: making the planner aware of the
+    ~15 cm of hardware hanging off the flange, for both collision checking
+    and for giving pick/place code a real TCP frame to target instead of
+    faking it with a hardcoded Z offset on tool0.
+
+    `flange_to_tcp` is the distance from the tool0 face to that grasp point
+    on THIS robot's actual hardware stack. Its default (0.155 m) is carried
+    over from the ad-hoc flange-height offsets that used to be hardcoded in
+    robot_control (RobotControlNode::zAttach and
+    RobotPoseUtility::min_z_offset_) to compensate for the gripper not being
+    part of the kinematic chain. It has NOT been independently re-measured
+    on hardware as part of this change -- verify it (e.g. jog the TCP down
+    slowly with the e-stop ready and confirm it reaches the board/piece
+    surface at Z=0 in whatever frame pick poses are expressed) before
+    trusting it for real picks, and adjust here if it's off.
+  -->
+  <xacro:macro name="hande_gripper" params="parent prefix flange_to_tcp:=0.155 body_width:=0.09">
+
+    <link name="${prefix}hande_gripper_link">
+      <visual>
+        <origin xyz="0 0 ${flange_to_tcp/2}" rpy="0 0 0"/>
+        <geometry>
+          <box size="${body_width} ${body_width} ${flange_to_tcp}"/>
+        </geometry>
+        <material name="hande_grey">
+          <color rgba="0.2 0.2 0.2 1.0"/>
+        </material>
+      </visual>
+      <collision>
+        <origin xyz="0 0 ${flange_to_tcp/2}" rpy="0 0 0"/>
+        <geometry>
+          <box size="${body_width} ${body_width} ${flange_to_tcp}"/>
+        </geometry>
+      </collision>
+    </link>
+
+    <joint name="${prefix}tool0_to_hande" type="fixed">
+      <parent link="${parent}"/>
+      <child link="${prefix}hande_gripper_link"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+    </joint>
+
+    <!-- Real grasp point: the planning tip for pick/place, in place of tool0 -->
+    <link name="${prefix}tcp"/>
+
+    <joint name="${prefix}tool0_to_tcp" type="fixed">
+      <parent link="${parent}"/>
+      <child link="${prefix}tcp"/>
+      <origin xyz="0 0 ${flange_to_tcp}" rpy="0 0 0"/>
+    </joint>
+
+  </xacro:macro>
+
+</robot>
