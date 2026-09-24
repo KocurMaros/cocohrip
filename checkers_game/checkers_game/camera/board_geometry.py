@@ -1,24 +1,30 @@
 """Pure, hardware-free board-corner detection.
 
-This module contains only image-processing logic (OpenCV + numpy) and has no
-dependency on the camera SDK or any GUI code, so it can be imported and unit
-tested on a machine that has neither a camera nor the Ximea SDK installed.
+Only OpenCV + numpy - no camera SDK, no GUI - so it can be tested on a
+machine with no camera attached (see test/test_board_geometry.py).
 
-Corner convention
-------------------
-Corners are always returned as a (4, 2) float32 array in the fixed order::
+Algorithm (finds the outline of the 8x8 squares, not the board's outer edge):
+  1. Detect square candidates: adaptive/Otsu thresholds in both polarities,
+     slightly eroded so diagonally-touching squares separate, keep convex
+     quadrilaterals.
+  2. Fit a perspective lattice (homography image -> cell coordinates) to
+     those candidates with RANSAC-style seeding and region growing. Junk
+     candidates (pieces, letters, background) simply don't fit the lattice.
+  3. Refine on the checkerboard's X-junctions (where 4 squares meet) with
+     sub-pixel accuracy. X-junctions only exist *inside* the board - where
+     the squares meet the frame it's a T-junction - so they pin down the
+     board extent without ever latching onto the frame's outer lines.
+  4. Pick the 8x8 cell window whose 7x7 internal points match the found
+     junctions, backed by a per-cell light/dark alternation check, and
+     extrapolate the 4 outer corners from a homography fit to all
+     junctions (so partially occluded / unevenly lit edges still work).
 
-    index 0: BL (bottom-left)
-    index 1: TL (top-left)
-    index 2: TR (top-right)
-    index 3: BR (bottom-right)
+If the evidence is too weak (too few junctions, junctions covering only
+part of the board) it returns None instead of guessing, so the caller can
+fall back to manual selection.
 
-This assumes the camera is rigidly mounted and looks down at the board with
-roughly the orientation shown in the reference photo (board not rotated more
-than ~45 degrees from upright) - see README/proposal discussion. Because the
-mount is fixed, corner identity can be assigned purely from geometry (top-most
-/ bottom-most / left-most / right-most) instead of from piece placement, which
-only worked for the exact starting position.
+Corners are returned as a (4, 2) float32 array in the fixed order
+BL, TL, TR, BR (index 0..3), in the input image's pixel coordinates.
 """
 
 import cv2
@@ -26,372 +32,336 @@ import numpy as np
 
 CORNER_NAMES = ("BL", "TL", "TR", "BR")
 
+_WORK_MAX_DIM = 640
+
 
 def order_corners(points):
-    """Sort 4 arbitrary points into the fixed BL, TL, TR, BR convention.
-
-    Uses the standard sum/difference trick: TL has the smallest x+y, BR the
-    largest x+y, TR has the smallest y-x, BL has the largest y-x.
-    """
+    """Sort 4 points into BL, TL, TR, BR (sum/difference trick)."""
     pts = np.asarray(points, dtype=np.float32).reshape(4, 2)
     s = pts.sum(axis=1)
-    diff = pts[:, 1] - pts[:, 0]  # y - x
-
-    tl = pts[np.argmin(s)]
-    br = pts[np.argmax(s)]
-    tr = pts[np.argmin(diff)]
-    bl = pts[np.argmax(diff)]
-
-    return np.array([bl, tl, tr, br], dtype=np.float32)
+    diff = pts[:, 1] - pts[:, 0]
+    return np.array([pts[np.argmax(diff)], pts[np.argmin(s)],
+                     pts[np.argmin(diff)], pts[np.argmax(s)]], dtype=np.float32)
 
 
-def warp_to_square(image, corners_bl_tl_tr_br, size=800, margin=0):
-    """Perspective-warp the board defined by corners (BL,TL,TR,BR order) to
-    a `size` x `size` square, with an optional pixel margin of extra canvas
-    around it. Returns (warped_image, homography_matrix).
-    """
-    canvas = size + 2 * margin
-    dst = np.array([
-        [margin, margin + size],          # BL
-        [margin, margin],                 # TL
-        [margin + size, margin],          # TR
-        [margin + size, margin + size],   # BR
-    ], dtype=np.float32)
-    H = cv2.getPerspectiveTransform(
-        np.asarray(corners_bl_tl_tr_br, dtype=np.float32), dst)
-    # BORDER_REPLICATE avoids a hard black/valid-data seam when the margin
-    # samples outside the source image; a constant-fill seam is a very
-    # strong artificial edge that can fool the periodicity search below.
-    warped = cv2.warpPerspective(image, H, (canvas, canvas),
-                                  borderMode=cv2.BORDER_REPLICATE)
-    return warped, H
+def _to_gray(image):
+    if image.ndim == 2:
+        return image
+    if image.shape[2] == 4:
+        return cv2.cvtColor(image, cv2.COLOR_BGRA2GRAY)
+    return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
 
-def _angle_dist(a, b):
-    d = abs(a - b) % 180
-    return min(d, 180 - d)
+def _map(H, pts):
+    pts = np.asarray(pts, dtype=np.float64).reshape(-1, 1, 2)
+    return cv2.perspectiveTransform(pts, H).reshape(-1, 2)
 
 
-def _hough_segments(gray, min_len_frac=0.30, canny_lo=40, canny_hi=120):
-    h, w = gray.shape[:2]
+def _order_quad(p):
+    c = p.mean(axis=0)
+    return p[np.argsort(np.arctan2(p[:, 1] - c[1], p[:, 0] - c[0]))]
+
+
+def _quad_area(q):
+    return abs(cv2.contourArea(q.astype(np.float32)))
+
+
+# --------------------------------------------------------------------------
+# 1. square candidates
+# --------------------------------------------------------------------------
+
+def _find_square_candidates(gray):
+    h, w = gray.shape
+    md = min(h, w)
+    min_a, max_a = (md / 45.0) ** 2, (md / 4.0) ** 2
     blur = cv2.GaussianBlur(gray, (5, 5), 0)
-    edges = cv2.Canny(blur, canny_lo, canny_hi)
-    min_len = int(min_len_frac * min(h, w))
-    raw = cv2.HoughLinesP(edges, 1, np.pi / 360, threshold=50,
-                           minLineLength=min_len, maxLineGap=12)
-    if raw is None:
-        return []
-    segs = []
-    for line in raw[:, 0]:
-        x1, y1, x2, y2 = [float(v) for v in line]
-        length = float(np.hypot(x2 - x1, y2 - y1))
-        angle = float(np.degrees(np.arctan2(y2 - y1, x2 - x1)) % 180)
-        segs.append(dict(x1=x1, y1=y1, x2=x2, y2=y2, length=length,
-                          angle=angle, mx=(x1 + x2) / 2, my=(y1 + y2) / 2))
-    return segs
+    erode_it = max(1, int(round(md / 300.0)))
+    kernel = np.ones((3, 3), np.uint8)
 
+    binaries = []
+    for frac in (0.08, 0.15, 0.25):
+        block = int(md * frac) | 1
+        for mode in (cv2.THRESH_BINARY, cv2.THRESH_BINARY_INV):
+            binaries.append(cv2.adaptiveThreshold(
+                blur, 255, cv2.ADAPTIVE_THRESH_MEAN_C, mode, block, 0))
+    for mode in (cv2.THRESH_BINARY, cv2.THRESH_BINARY_INV):
+        binaries.append(cv2.threshold(blur, 0, 255, mode + cv2.THRESH_OTSU)[1])
 
-def _dominant_direction_clusters(segs, angle_tolerance=12):
-    """Split segments into the two roughly-perpendicular dominant directions
-    of the board's row/column grid. Returns (clusterA, clusterB, angleA,
-    angleB) or (None, None, None, None) if no clear structure is found.
-    """
-    if len(segs) < 8:
-        return None, None, None, None
-
-    hist = np.zeros(180)
-    for s in segs:
-        hist[int(s['angle']) % 180] += s['length']
-    angle_a = int(np.argmax(hist))
-
-    angle_b, best_score = None, -1.0
-    for cand in range(180):
-        if _angle_dist(cand, angle_a) > 60 and hist[cand] > best_score:
-            best_score = hist[cand]
-            angle_b = cand
-
-    if angle_b is None:
-        return None, None, None, None
-
-    cluster_a = [s for s in segs if _angle_dist(s['angle'], angle_a) < angle_tolerance]
-    cluster_b = [s for s in segs if _angle_dist(s['angle'], angle_b) < angle_tolerance]
-
-    if len(cluster_a) < 2 or len(cluster_b) < 2:
-        return None, None, None, None
-
-    return cluster_a, cluster_b, angle_a, angle_b
-
-
-def _shared_rho(seg, direction_deg):
-    nrad = np.deg2rad(direction_deg + 90)
-    return seg['mx'] * np.cos(nrad) + seg['my'] * np.sin(nrad)
-
-
-def _seg_as_infinite_line(seg, length=2000):
-    dx, dy = seg['x2'] - seg['x1'], seg['y2'] - seg['y1']
-    n = np.hypot(dx, dy)
-    if n < 1e-6:
-        dx, dy = 1.0, 0.0
-    else:
-        dx, dy = dx / n, dy / n
-    return ((seg['mx'] - dx * length, seg['my'] - dy * length),
-            (seg['mx'] + dx * length, seg['my'] + dy * length))
-
-
-def _line_intersect(p1, p2, p3, p4):
-    x1, y1 = p1
-    x2, y2 = p2
-    x3, y3 = p3
-    x4, y4 = p4
-    denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
-    if abs(denom) < 1e-9:
-        return None
-    px = ((x1 * y2 - y1 * x2) * (x3 - x4) - (x1 - x2) * (x3 * y4 - y3 * x4)) / denom
-    py = ((x1 * y2 - y1 * x2) * (y3 - y4) - (y1 - y2) * (x3 * y4 - y3 * x4)) / denom
-    return (px, py)
-
-
-def _poly_area(pts):
-    pts = np.array(pts)
-    x, y = pts[:, 0], pts[:, 1]
-    return 0.5 * abs(np.dot(x, np.roll(y, 1)) - np.dot(y, np.roll(x, 1)))
-
-
-def _coarse_quad(cluster_a, cluster_b, angle_a, angle_b, img_shape,
-                  min_len_frac=0.3, topk=4):
-    """Find a plausible (not necessarily precise) quadrilateral bounding the
-    board, robust to a handful of stray long lines (clothing, table edge,
-    etc.) by scoring candidate quads instead of blindly taking extremes.
-    """
-    h, w = img_shape[:2]
-
-    def candidates(cluster, direction_deg):
-        rhos = np.array([_shared_rho(s, direction_deg) for s in cluster])
-        lens = np.array([s['length'] for s in cluster])
-        idxs = np.where(lens > min_len_frac * min(h, w))[0]
-        if len(idxs) == 0:
-            idxs = np.arange(len(cluster))
-        lo = idxs[np.argsort(rhos[idxs])][:topk]
-        hi = idxs[np.argsort(-rhos[idxs])][:topk]
-        return [cluster[i] for i in lo], [cluster[i] for i in hi]
-
-    lo_a, hi_a = candidates(cluster_a, angle_a)
-    lo_b, hi_b = candidates(cluster_b, angle_b)
-
-    img_area = h * w
-    best = None
-    for sa in lo_a:
-        for sb in hi_a:
-            for tb in lo_b:
-                for bb in hi_b:
-                    line_a0 = _seg_as_infinite_line(sa)
-                    line_a1 = _seg_as_infinite_line(sb)
-                    line_b0 = _seg_as_infinite_line(tb)
-                    line_b1 = _seg_as_infinite_line(bb)
-                    c00 = _line_intersect(*line_a0, *line_b0)
-                    c01 = _line_intersect(*line_a0, *line_b1)
-                    c10 = _line_intersect(*line_a1, *line_b0)
-                    c11 = _line_intersect(*line_a1, *line_b1)
-                    if None in (c00, c01, c10, c11):
-                        continue
-                    quad = [c00, c01, c11, c10]
-                    area = _poly_area(quad)
-                    if area < 0.35 * img_area or area > 1.3 * img_area:
-                        continue
-                    xs = [p[0] for p in quad]
-                    ys = [p[1] for p in quad]
-                    if (min(xs) < -0.3 * w or max(xs) > 1.3 * w or
-                            min(ys) < -0.3 * h or max(ys) > 1.3 * h):
-                        continue
-                    if best is None or area > best[0]:
-                        best = (area, quad)
-
-    if best is None:
-        return None
-    return np.array(best[1], dtype=np.float32)
-
-
-def _find_profile_peaks(profile):
-    thresh = profile.mean() + 0.5 * profile.std()
-    peaks = []
-    i, n = 0, len(profile)
-    while i < n:
-        if profile[i] > thresh:
-            j = i
-            while j < n and profile[j] > thresh:
-                j += 1
-            seg = profile[i:j]
-            peak_idx = i + int(np.argmax(seg))
-            peaks.append((peak_idx, float(profile[peak_idx])))
-            i = j
-        else:
-            i += 1
-    return peaks
-
-
-def _refine_edge_pair(profile, size, n_lines=9,
-                       denom_range=(6.0, 10.0), denom_steps=81,
-                       min_matches=7, tolerance_frac=0.22, nominal_denom=8.0,
-                       prior_sigma=1.5):
-    """Given a 1D gradient-magnitude profile of an (approximately) rectified
-    grid, fit a periodic pattern of `n_lines` evenly spaced boundaries and
-    return the (first, last) matched position - i.e. the outermost pair that
-    is consistent with the expected 8-cell spacing. This is what lets us
-    reject the frame's *outer* edge (which does not fit the periodicity of
-    the 8x8 grid) in favor of the true inner edge.
-
-    `warp_to_square` maps the coarse quad exactly onto `size`, so a
-    *perfectly* accurate coarse quad implies a cell spacing of exactly
-    size/8. A real coarse quad is imprecise, so we still search a wide
-    range of spacings (denom_range), but candidates near size/8 get a soft
-    preference (gaussian prior on denom) - this avoids the fit locking onto
-    an off-by-one-cell alias pattern when the correct, in-range candidate
-    exists but scores only slightly lower on raw peak strength.
-    """
-    peaks = _find_profile_peaks(profile)
-    if len(peaks) < 5:
-        return None
-    positions = np.array([p[0] for p in peaks])
-    weights = np.array([p[1] for p in peaks])
-
-    best = None
-    for o in positions:
-        for denom in np.linspace(denom_range[0], denom_range[1], denom_steps):
-            spacing = size / denom
-            score, matched = 0.0, []
-            for k in range(n_lines):
-                target = o + k * spacing
-                d = np.abs(positions - target)
-                idx = np.argmin(d)
-                if d[idx] < spacing * tolerance_frac:
-                    score += weights[idx]
-                    matched.append(positions[idx])
-            if len(matched) < min_matches:
+    quads = []
+    for binary in binaries:
+        binary = cv2.erode(binary, kernel, iterations=erode_it)
+        contours, _ = cv2.findContours(binary, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        for c in contours:
+            a = cv2.contourArea(c)
+            if a < min_a or a > max_a:
                 continue
-            prior = np.exp(-0.5 * ((denom - nominal_denom) / prior_sigma) ** 2)
-            weighted_score = score * prior
-            if best is None or weighted_score > best[0]:
-                best = (weighted_score, spacing, o, matched)
+            hull = cv2.convexHull(c)
+            hull_area = cv2.contourArea(hull)
+            if hull_area <= 0 or a / hull_area < 0.85:
+                continue
+            approx = cv2.approxPolyDP(hull, 0.06 * cv2.arcLength(hull, True), True)
+            if len(approx) != 4:
+                continue
+            p = _order_quad(approx.reshape(4, 2).astype(np.float64))
+            sides = np.linalg.norm(p - np.roll(p, -1, axis=0), axis=1)
+            if sides.min() <= 0 or sides.max() / sides.min() > 1.8:
+                continue
+            if _quad_area(p) / hull_area < 0.85:
+                continue
+            quads.append(p)
 
-    if best is None:
+    if not quads:
+        return np.zeros((0, 4, 2))
+    quads = np.array(quads)
+    # the different thresholds find the same squares many times over
+    centers = quads.mean(axis=1)
+    sizes = np.sqrt([_quad_area(q) for q in quads])
+    keep = []
+    for i in np.argsort(-sizes):
+        if all(np.linalg.norm(centers[i] - centers[k]) > 0.3 * sizes[i] for k in keep):
+            keep.append(i)
+    return quads[keep]
+
+
+# --------------------------------------------------------------------------
+# 2. lattice fit
+# --------------------------------------------------------------------------
+
+def _cell_fit(H, quads, tol):
+    """Which quads sit exactly on one lattice cell under H (image->lattice)."""
+    n = len(quads)
+    lat = _map(H, quads.reshape(-1, 2)).reshape(n, 4, 2)
+    rounded = np.round(lat)
+    err = np.abs(lat - rounded).max(axis=(1, 2))
+    cell = np.floor(lat.mean(axis=1)).astype(int)
+    ok = err < tol
+    for k in np.where(ok)[0]:
+        expected = {(cell[k, 0] + dx, cell[k, 1] + dy) for dx in (0, 1) for dy in (0, 1)}
+        got = {(int(x), int(y)) for x, y in rounded[k]}
+        ok[k] = got == expected
+    return ok, cell, rounded
+
+
+def _fit_lattice(quads, max_seeds=40):
+    if len(quads) < 4:
         return None
-    matched = sorted(best[3])
-    return matched[0], matched[-1]
+    unit = np.array([[0, 0], [1, 0], [1, 1], [0, 1]], dtype=np.float32)
+    sizes = np.sqrt([_quad_area(q) for q in quads])
+    seeds = np.argsort(np.abs(sizes - np.median(sizes)))[:max_seeds]
+
+    scored = []
+    for s in seeds:
+        H = cv2.getPerspectiveTransform(quads[s].astype(np.float32), unit)
+        ok, cell, _ = _cell_fit(H, quads, 0.25)
+        scored.append(((ok & (np.abs(cell).max(axis=1) <= 2)).sum(), H))
+    scored.sort(key=lambda t: -t[0])
+
+    best = None
+    for _, H in scored[:6]:
+        # grow outwards from the seed: a single cell extrapolates poorly
+        radius = 2
+        for _ in range(8):
+            ok, cell, rounded = _cell_fit(H, quads, 0.25)
+            use = ok & (np.abs(cell).max(axis=1) <= radius) if radius < 99 else ok
+            if use.sum() < 2:
+                break
+            H2, _ = cv2.findHomography(quads[use].reshape(-1, 2), rounded[use].reshape(-1, 2), 0)
+            if H2 is None:
+                break
+            H = H2
+            radius = radius + 2 if radius < 10 else 99
+        ok, cell, _ = _cell_fit(H, quads, 0.2)
+        if best is None or ok.sum() > best[0]:
+            best = (int(ok.sum()), H, ok, cell)
+    if best is None or best[0] < 6:
+        return None
+    return best
 
 
-def _is_plausible_square(corners_bl_tl_tr_br, max_side_ratio=1.35,
-                          max_diagonal_ratio=1.25):
-    """Sanity-check that a candidate quad could plausibly be a (perspective-
-    projected) square board, so a badly-fit result is rejected instead of
-    silently returned. A real camera view of a square board may show
-    unequal side lengths (perspective foreshortening) and unequal diagonals,
-    but not by an extreme amount for the shallow viewing angles this camera
-    is mounted at.
-    """
-    bl, tl, tr, br = corners_bl_tl_tr_br
+# --------------------------------------------------------------------------
+# 3. X-junctions
+# --------------------------------------------------------------------------
 
-    def dist(a, b):
-        return float(np.hypot(a[0] - b[0], a[1] - b[1]))
+def _refine_junctions(gray, H, cells, cell_px):
+    """Sub-pixel lattice points that look like checkerboard X-junctions.
+    Returns (lattice_coords (N,2), image_coords (N,2))."""
+    Hinv = np.linalg.inv(H)
+    imin, jmin = cells.min(axis=0) - 1
+    imax, jmax = cells.max(axis=0) + 2
+    lat = np.array([[i, j] for i in range(imin, imax + 1)
+                    for j in range(jmin, jmax + 1)], dtype=np.float64)
 
-    sides = [dist(bl, tl), dist(tl, tr), dist(tr, br), dist(br, bl)]
-    if min(sides) < 1e-3:
-        return False
-    if max(sides) / min(sides) > max_side_ratio:
-        return False
+    # sample the 4 diagonal quadrants around each point: an X-junction has
+    # diagonal pairs equal and the two pairs different; a T/L-junction or
+    # a plain edge doesn't.
+    offs = np.array([[-0.25, -0.25], [0.25, 0.25], [0.25, -0.25], [-0.25, 0.25]])
+    r = max(1, int(cell_px * 0.08))
+    blur = cv2.blur(gray, (2 * r + 1, 2 * r + 1)).astype(np.float64)
+    h, w = gray.shape
+    q = _map(Hinv, (lat[:, None, :] + offs[None]).reshape(-1, 2))
+    xi = np.clip(np.round(q[:, 0]).astype(int), 0, w - 1)
+    yi = np.clip(np.round(q[:, 1]).astype(int), 0, h - 1)
+    v = blur[yi, xi].reshape(-1, 4)
+    contrast = np.abs(0.5 * (v[:, 0] + v[:, 1]) - 0.5 * (v[:, 2] + v[:, 3]))
+    noise = np.abs(v[:, 0] - v[:, 1]) + np.abs(v[:, 2] - v[:, 3])
+    structural = contrast > 2.0 * noise
+    ref = np.percentile(contrast[structural], 75) if structural.sum() >= 4 else contrast.max()
+    is_x = structural & (contrast > max(6.0, 0.25 * ref))
 
-    diagonals = [dist(bl, tr), dist(tl, br)]
-    if min(diagonals) < 1e-3:
-        return False
-    if max(diagonals) / min(diagonals) > max_diagonal_ratio:
-        return False
+    lat = lat[is_x]
+    guess = _map(Hinv, lat).astype(np.float32) if len(lat) else np.zeros((0, 2), np.float32)
+    inside = ((guess[:, 0] > 3) & (guess[:, 0] < w - 4) &
+              (guess[:, 1] > 3) & (guess[:, 1] < h - 4))
+    lat, guess = lat[inside], guess[inside]
+    if len(lat) == 0:
+        return lat, np.zeros((0, 2))
+    win = max(3, int(cell_px * 0.2))
+    refined = cv2.cornerSubPix(
+        gray, guess.reshape(-1, 1, 2).copy(), (win, win), (-1, -1),
+        (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 40, 0.01)).reshape(-1, 2)
+    good = np.linalg.norm(refined - guess, axis=1) < 0.2 * cell_px
+    return lat[good], refined[good].astype(np.float64)
 
-    return True
+
+# --------------------------------------------------------------------------
+# 4. 8x8 window
+# --------------------------------------------------------------------------
+
+def _cell_checker_evidence(gray, H, i_range, j_range, cell_px):
+    """parity * (cell brightness - mean of its 4 neighbours) per cell.
+    Board cells alternate with their neighbours; frame, label strip and
+    background don't. Samples near the cell border so a piece in the middle
+    of a square doesn't dominate."""
+    Hinv = np.linalg.inv(H)
+    i0, i1 = i_range
+    j0, j1 = j_range
+    ring = np.array([[u, v] for u in (0.15, 0.5, 0.85) for v in (0.15, 0.5, 0.85)
+                     if not (u == 0.5 and v == 0.5)])
+    r = max(1, int(cell_px * 0.06))
+    blur = cv2.blur(gray, (2 * r + 1, 2 * r + 1)).astype(np.float64)
+    h, w = gray.shape
+    ni, nj = i1 - i0, j1 - j0
+    V = np.full((ni, nj), np.nan)
+    for a in range(ni):
+        for b in range(nj):
+            q = _map(Hinv, ring + [i0 + a, j0 + b])
+            if (q < 0).any() or (q[:, 0] >= w).any() or (q[:, 1] >= h).any():
+                continue
+            V[a, b] = np.median(blur[q[:, 1].astype(int), q[:, 0].astype(int)])
+    evidence = {}
+    for a in range(ni):
+        for b in range(nj):
+            if np.isnan(V[a, b]):
+                continue
+            nb = [V[x, y] for x, y in ((a - 1, b), (a + 1, b), (a, b - 1), (a, b + 1))
+                  if 0 <= x < ni and 0 <= y < nj and not np.isnan(V[x, y])]
+            if len(nb) < 2:
+                continue
+            parity = 1 if (i0 + a + j0 + b) % 2 == 0 else -1
+            evidence[(i0 + a, j0 + b)] = parity * (V[a, b] - np.mean(nb))
+    return evidence
 
 
-def find_board_corners(image, rectify_size=800, rectify_margin_frac=0.18,
-                        debug=None):
-    """Locate the 4 corners of the playing area (the edges closest to the
-    squares, i.e. the *inner* edge of the board's frame/border) in `image`.
+def _normalised_evidence(gray, H, lat_j, cells, cell_px):
+    lo = np.minimum(lat_j.min(axis=0), cells.min(axis=0)).astype(int) - 3
+    hi = np.maximum(lat_j.max(axis=0), cells.max(axis=0)).astype(int) + 3
+    raw = _cell_checker_evidence(gray, H, (lo[0], hi[0]), (lo[1], hi[1]), cell_px)
+    # orient the sign with cells fully surrounded by junctions (certainly on
+    # the board) and scale so a clear board cell is worth ~1 point
+    J = {(int(a), int(b)) for a, b in lat_j}
+    core = [v for (a, b), v in raw.items()
+            if {(a, b), (a + 1, b), (a, b + 1), (a + 1, b + 1)} <= J]
+    if len(core) < 4:
+        return None
+    sign = 1.0 if np.median(core) >= 0 else -1.0
+    scale = np.median(np.abs(core)) + 1e-6
+    return {k: float(np.clip(sign * v / scale, -1.5, 1.5)) for k, v in raw.items()}
 
-    Two-stage approach:
-      1. Coarse localization via dominant-line Hough clustering - finds
-         *some* quadrilateral that reasonably bounds the board.
-      2. Perspective-rectify using that coarse quad (with generous margin),
-         then locate the true inner grid boundary via 1D gradient projection
-         profiles, fitting the known 8x8 periodicity. This works regardless
-         of whether the coarse quad landed on the frame's inner or outer
-         edge, because periodicity - not raw edge strength - decides.
 
-    Returns (corners, message):
-      corners: (4, 2) float32 array in BL, TL, TR, BR order, or None
-      message: human-readable success/failure reason (for logging)
+def _choose_window(junction_lat, cells, evidence):
+    J = [(int(a), int(b)) for a, b in junction_lat]
+    C = [(int(a), int(b)) for a, b in cells]
+    all_i = [p[0] for p in J + C]
+    all_j = [p[1] for p in J + C]
+    best = None
+    for i0 in range(min(all_i) - 8, max(all_i) + 1):
+        for j0 in range(min(all_j) - 8, max(all_j) + 1):
+            j_in = sum(1 for a, b in J if i0 < a < i0 + 8 and j0 < b < j0 + 8)
+            c_in = sum(1 for a, b in C if i0 <= a < i0 + 8 and j0 <= b < j0 + 8)
+            score = 2 * j_in - 3 * (len(J) - j_in) + c_in - 1.5 * (len(C) - c_in)
+            if evidence:
+                e_in = e_out = 0.0
+                for (a, b), v in evidence.items():
+                    if i0 <= a < i0 + 8 and j0 <= b < j0 + 8:
+                        e_in += v
+                    else:
+                        e_out += v
+                score += e_in - max(0.0, e_out)
+            if best is None or score > best[0]:
+                best = (score, i0, j0, j_in, c_in)
+    return best
 
-    `debug` (optional dict) receives intermediate artifacts (coarse_quad,
-    warped, homography) for visualization/testing, when provided.
+
+# --------------------------------------------------------------------------
+# public API
+# --------------------------------------------------------------------------
+
+def find_board_corners(image, debug=None):
+    """Locate the outline of the 8x8 squares in `image` (BGR, BGRA or gray).
+
+    Returns (corners, message): corners is a (4, 2) float32 array in
+    BL, TL, TR, BR order, or None if the board couldn't be found reliably;
+    message is a human-readable reason for logging. `debug`, if a dict, is
+    filled with intermediate results (in working-resolution coordinates).
     """
     if image is None or image.size == 0:
         return None, "empty image"
+    gray = _to_gray(image)
+    scale = min(1.0, _WORK_MAX_DIM / float(max(gray.shape)))
+    if scale < 1.0:
+        gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    gray = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray)
 
-    h, w = image.shape[:2]
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-
-    segs = _hough_segments(gray)
-    if len(segs) < 8:
-        return None, f"too few line segments detected ({len(segs)})"
-
-    cluster_a, cluster_b, angle_a, angle_b = _dominant_direction_clusters(segs)
-    if cluster_a is None:
-        return None, "could not find two dominant perpendicular directions"
-
-    coarse_quad = _coarse_quad(cluster_a, cluster_b, angle_a, angle_b, image.shape)
-    if coarse_quad is None:
-        return None, "no plausible coarse quadrilateral found"
-
+    quads = _find_square_candidates(gray)
     if debug is not None:
-        debug['coarse_quad'] = coarse_quad.copy()
+        debug['quads'] = quads
+    if len(quads) < 6:
+        return None, f"too few square candidates ({len(quads)})"
 
-    coarse_ordered = order_corners(coarse_quad)
-    warped, H = warp_to_square(image, coarse_ordered, size=rectify_size,
-                                margin=int(rectify_size * rectify_margin_frac))
+    fit = _fit_lattice(quads)
+    if fit is None:
+        return None, "could not fit a square lattice"
+    _, H, ok, cell = fit
+    cells = cell[ok]
+    cell_px = float(np.median(np.sqrt([_quad_area(q) for q in quads[ok]])))
 
+    lat_j, img_j = _refine_junctions(gray, H, cells, cell_px)
+    if len(lat_j) >= 8:
+        H2, _ = cv2.findHomography(img_j, lat_j, cv2.RANSAC, 0.08)
+        if H2 is not None:
+            H = H2
+            lat_j, img_j = _refine_junctions(gray, H, cells, cell_px)
+    if len(lat_j) < 4:
+        return None, f"only {len(lat_j)} grid junctions found"
+
+    evidence = _normalised_evidence(gray, H, lat_j, cells, cell_px)
+    _, i0, j0, j_in, c_in = _choose_window(lat_j, cells, evidence)
     if debug is not None:
-        debug['warped'] = warped
-        debug['homography'] = H
+        debug.update(H=H, cells=cells, lat_j=lat_j, img_j=img_j, window=(i0, j0))
+    if j_in < 20:
+        return None, f"only {j_in} of 49 internal grid junctions found"
 
-    wgray = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY)
-    sx = cv2.Sobel(wgray, cv2.CV_32F, 1, 0, ksize=3)
-    sy = cv2.Sobel(wgray, cv2.CV_32F, 0, 1, ksize=3)
-    col_profile = np.abs(sx).sum(axis=0)
-    row_profile = np.abs(sy).sum(axis=1)
+    sel = np.array([i0 < a < i0 + 8 and j0 < b < j0 + 8 for a, b in lat_j])
+    lat_in, img_in = lat_j[sel], img_j[sel]
+    span_i = len(set(lat_in[:, 0].astype(int)))
+    span_j = len(set(lat_in[:, 1].astype(int)))
+    if span_i < 6 or span_j < 6:
+        return None, (f"grid junctions only cover {span_i}x{span_j} of the 7x7 "
+                      "inner rows/cols - refusing to extrapolate")
 
-    left_right = _refine_edge_pair(col_profile, rectify_size)
-    top_bottom = _refine_edge_pair(row_profile, rectify_size)
-    if left_right is None or top_bottom is None:
-        return None, "profile refinement did not find a periodic 8x8 pattern"
-
-    left, right = left_right
-    top, bottom = top_bottom
-
-    if debug is not None:
-        debug['refined_edges'] = dict(left=left, right=right, top=top, bottom=bottom)
-
-    # warped-space corners in TL,TR,BR,BL order (matching warp_to_square's
-    # canvas layout), then map back and re-order canonically.
-    warped_corners = np.array([
-        [left, top], [right, top], [right, bottom], [left, bottom],
-    ], dtype=np.float32)
-
-    H_inv = np.linalg.inv(H)
-    homo = np.hstack([warped_corners, np.ones((4, 1), dtype=np.float32)])
-    mapped = (H_inv @ homo.T).T
-    mapped = mapped[:, :2] / mapped[:, 2:3]
-
-    corners = order_corners(mapped)
-
-    if debug is not None:
-        debug['final_corners'] = corners.copy()
-
-    if not _is_plausible_square(corners):
-        return None, "refined corners are not a plausible square (rejected instead of guessing)"
-
-    return corners, "ok"
+    Hb, _ = cv2.findHomography(img_in, lat_in, cv2.RANSAC, 0.08)
+    if Hb is None:
+        Hb = H
+    board_lat = [[i0, j0], [i0 + 8, j0], [i0 + 8, j0 + 8], [i0, j0 + 8]]
+    corners = _map(np.linalg.inv(Hb), board_lat) / scale
+    return order_corners(corners), f"ok ({j_in}/49 grid junctions, {c_in} squares)"

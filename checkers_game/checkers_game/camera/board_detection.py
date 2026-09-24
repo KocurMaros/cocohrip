@@ -89,7 +89,8 @@ class BoardDetection:
             log("USING CACHED BOARD CALIBRATION")
             log("="*60)
             log("  → Grid should already line up with the squares.")
-            log("  → SPACE to accept, or 'R' to recalibrate from scratch.")
+            log("  → SPACE to accept, 'A' to re-run auto-detection, or 'R' to")
+            log("    select the corners manually.")
             corners = self._verify_and_adjust_corners(cached)
             self._save_calibration(corners, image_shape)
             return corners
@@ -156,10 +157,10 @@ class BoardDetection:
 
     def _auto_detect_corners(self):
         """
-        Automatically detect the board corners: dominant-line clustering for
-        a coarse quad, then perspective-rectify and snap to the true inner
-        grid boundary via 8x8 periodicity matching. See board_geometry.py
-        for the full algorithm and its own standalone tests.
+        Automatically detect the outline of the 8x8 squares: detect the
+        individual squares, fit a perspective lattice to them and refine on
+        the checkerboard's internal grid junctions. See board_geometry.py
+        for the algorithm and test/test_board_geometry.py for its tests.
 
         Returns: (corners, reason_message) or (None, failure_reason)
         """
@@ -194,6 +195,7 @@ class BoardDetection:
         
         Controls:
         - SPACE/ENTER: Accept current corners
+        - 'A': Re-run automatic detection on the current camera image
         - 'R': Reset and select new corners manually
         - 1-4: Select corner to adjust, then click new position
         """
@@ -203,6 +205,7 @@ class BoardDetection:
         log("Check if the grid aligns with the board squares.")
         log("Controls:")
         log("  SPACE/ENTER - Accept corners if grid looks good")
+        log("  A - Re-run automatic detection")
         log("  R - Reset and manually select new corners")
         log("  1/2/3/4 - Select corner to adjust (BL/TL/TR/BR)")
         log("  Click - Set new position for selected corner")
@@ -254,7 +257,7 @@ class BoardDetection:
                 # Add labels
                 cv2.putText(display_warped, "Grid should align with squares", (10, 30), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-                cv2.putText(display_warped, "SPACE=Accept, R=Reset, 1-4=Adjust corner", (10, 780), 
+                cv2.putText(display_warped, "SPACE=Accept, A=Auto, R=Manual, 1-4=Adjust", (10, 780), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
                 
                 cv2.imshow("Warped Board (Grid Check)", display_warped)
@@ -291,6 +294,14 @@ class BoardDetection:
                 cv2.destroyWindow("Original with Corners")
                 return current_corners.astype(np.float32)
             
+            # Re-run automatic detection (e.g. after the camera was moved or
+            # when the cached calibration is stale)
+            if key == ord('a') or key == ord('A'):
+                auto_corners, _ = self._auto_detect_corners()
+                if auto_corners is not None:
+                    current_corners = auto_corners.copy()
+                    selected_corner = None
+
             # Reset to manual selection
             if key == ord('r') or key == ord('R'):
                 log("  → Switching to manual corner selection...")
@@ -1723,4 +1734,4 @@ class BoardDetection:
         """
         Update the expected number of empty fields based on current game state
         """
-        self.numberOfEmptyFields = 64 - game.board.black_left - game.board.white_left
+        self.numberOfEmptyFields = 64 - game.board.black_left - game.board.white_left
