@@ -19,10 +19,12 @@
       <child link="table" />
     </joint>
 
+    <!-- Visual uses a decimated copy (~5x fewer triangles) to keep RViz responsive;
+         collision keeps the exact original mesh. -->
     <link name="table">
       <visual>
         <geometry>
-          <mesh filename="package://cocohrip_description/meshes/cocohrip.dae"/>
+          <mesh filename="package://cocohrip_description/meshes/cocohrip_visual.dae"/>
         </geometry>
       </visual>
       <collision>
@@ -77,7 +79,8 @@
     <!--
       Real Robotiq Hand-E gripper (meshes + actuated mimic fingers), vendored from
       https://github.com/macmacal/robotiq_hande_description (Apache-2.0), replacing the earlier
-      placeholder box (hande_gripper.xacro).
+      placeholder box (hande_gripper.xacro). Its visual meshes are decimated (~0.2 mm max
+      deviation, ~12x fewer triangles) to keep RViz responsive; collision geometry is upstream's.
 
       use_fake_hardware is hardcoded to true here regardless of whether the ARM is real/mock:
       the actual gripper on this cell is still driven by the existing bespoke
