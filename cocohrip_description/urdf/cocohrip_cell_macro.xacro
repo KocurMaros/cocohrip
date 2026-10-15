@@ -1,6 +1,7 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://ros.org/wiki/xacro">
   <xacro:include filename="$(find ur_description)/urdf/ur_macro.xacro"/>
+  <xacro:include filename="$(find robotiq_hande_description)/urdf/robotiq_hande_gripper.xacro"/>
 
   <xacro:macro name="cocohrip_cell" params="
     parent
@@ -18,10 +19,12 @@
       <child link="table" />
     </joint>
 
+    <!-- Visual uses a decimated copy (~5x fewer triangles) to keep RViz responsive;
+         collision keeps the exact original mesh. -->
     <link name="table">
       <visual>
         <geometry>
-          <mesh filename="package://cocohrip_description/meshes/cocohrip.dae"/>
+          <mesh filename="package://cocohrip_description/meshes/cocohrip_visual.dae"/>
         </geometry>
       </visual>
       <collision>
@@ -72,6 +75,36 @@
     >
       <origin xyz="0 0 0" rpy="0 0 0" />
     </xacro:ur_robot>
+
+    <!--
+      Real Robotiq Hand-E gripper (meshes + actuated mimic fingers), vendored from
+      https://github.com/macmacal/robotiq_hande_description (Apache-2.0), replacing the earlier
+      placeholder box (hande_gripper.xacro). Its visual meshes are decimated (~0.2 mm max
+      deviation, ~12x fewer triangles) to keep RViz responsive; collision geometry is upstream's.
+
+      use_fake_hardware is hardcoded to true here regardless of whether the ARM is real/mock:
+      the actual gripper on this cell is still driven by the existing bespoke
+      robotiq_hande_ros2_driver (gripper_srv, direct Modbus TCP), not by this package's
+      ros2_control interface or robotiq_hande_driver. This only gives the gripper's own joints
+      (left/right finger) a well-behaved mock state (mock_components/GenericSystem) so
+      ros2_control/MoveIt have something to report; it does not change how the real gripper is
+      commanded. The tty_port/baudrate/... args below are unused in fake-hardware mode but are
+      required (no macro defaults) by robotiq_hande_gripper.xacro.
+    -->
+    <xacro:robotiq_hande_gripper
+      name="${ur_type}_hande_gripper"
+      prefix="${ur_type}_"
+      parent="${ur_type}_tool0"
+      grip_pos_min="0.0"
+      grip_pos_max="0.025"
+      tty_port="/tmp/ttyUR"
+      baudrate="115200"
+      parity="N"
+      data_bits="8"
+      stop_bit="1"
+      slave_id="9"
+      use_fake_hardware="true"
+    />
   </xacro:macro>
 
 </robot>

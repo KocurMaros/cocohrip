@@ -4,6 +4,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
@@ -34,9 +35,18 @@ def generate_launch_description():
         )
     )
 
+    declared_arguments.append(
+        DeclareLaunchArgument(
+            "z_attach",
+            default_value="0.005",
+            description="Gripper fingertip (ur5e_robotiq_hande_end) height in meters when grasping a piece",
+        )
+    )
+
     # Initialize Arguments
     use_sim_time = LaunchConfiguration("use_sim_time")
     log_level = LaunchConfiguration("log_level")
+    z_attach = LaunchConfiguration("z_attach")
 
     # Robot Control Node
     robot_control_node = Node(
@@ -45,7 +55,8 @@ def generate_launch_description():
         name="robot_control_node",
         output="screen",
         parameters=[
-            {"use_sim_time": use_sim_time}
+            {"use_sim_time": use_sim_time},
+            {"z_attach": ParameterValue(z_attach, value_type=float)},
         ],
         arguments=['--ros-args', '--log-level', log_level],
         emulate_tty=True,

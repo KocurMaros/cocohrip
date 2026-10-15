@@ -67,6 +67,20 @@ public:
                                          const geometry_msgs::msg::Pose& target_position);
 
 private:
+    // Robotiq Hand-E flange-to-TCP distance (m): tool0 -> IO coupler (0.011) ->
+    // Hand-E body (0.099) -> fingertip contact plane (0.0465), per the vendored
+    // real geometry in robotiq_hande_description/urdf/robotiq_hande_gripper.xacro
+    // (the "${prefix}hande_end" frame). This is close to (but more precise than)
+    // the ~0.155 m empirically-tuned flange offset this constant replaces; it
+    // still hasn't been independently re-verified against the real cell's exact
+    // coupler/fingertip hardware. This used to be baked separately into
+    // zAttach/zMoving/zSafeTransition below (as flange heights, since planning
+    // targeted the bare "ur5e_tool0" flange) because the gripper wasn't part of
+    // the kinematic chain. Now that pose_utility_ targets "ur5e_robotiq_hande_end"
+    // directly, it is only needed here to translate the old empirically-tuned
+    // flange heights into real TCP-frame heights.
+    static constexpr double kHandeFlangeToTcp = 0.011 + 0.099 + 0.0465;
+
     // RobotPoseUtility instead of MoveGroupInterface
     std::shared_ptr<RobotPoseUtility> pose_utility_;
 
@@ -118,7 +132,7 @@ private:
     float square_size;      // Calculated from corner measurements
     float boardOffsetX;     // X position of square (0,0) center
     float boardOffsetY;     // Y position of square (0,0) center
-    float zAttach;          // Height for attaching pieces (min safe Z = 0.155m)
+    float zAttach;          // TCP (fingertip) height when grasping; ROS parameter "z_attach"
     float zMoving;          // Safe height for moving above board
     float zMoveOffset;      // Movement offset after placing / grasping a checker
     float zSafeTransition;  // Safe transition height for movements between squares
