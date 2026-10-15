@@ -6,8 +6,8 @@ Game flow
    difficulty).
 2. Press 'S' with the pieces in the start position (or 'F' to start from
    whatever position is on the board, human to move).
-3. Each side moves in turn under WCDF (English draughts) rules, BLACK (robot)
-   first unless the ``human_first`` parameter is true:
+3. Each side moves in turn under WCDF (English draughts) rules, the human
+   (white) first unless the ``human_first`` parameter is false:
    * HUMAN (white): move a piece, take your hand away.  When the detected
      board has been stable for ``stable_time`` seconds the move is matched
      against every legal move.  If you ignored a mandatory capture (or
@@ -20,9 +20,12 @@ Game flow
 4. The game ends when a side has no pieces / no legal move, or by draw
    (40 moves each without capture or man move, or 3-fold repetition).
 
-Keys (any OpenCV window focused): S start, F force-start from detected
+Everything is shown in ONE window ("Checkers", ui/dashboard.py): game board,
+camera + hand tracking, detection view, status / move list.
+
+Keys (game window focused): S start, F force-start from detected
 position, 1/2/3 difficulty, SPACE re-check the board now, R robot finished
-(manual), H print your legal moves, Q quit.
+(manual), H show your legal moves, Q quit.
 """
 
 import threading
@@ -37,13 +40,14 @@ from rclpy.node import Node
 
 from checkers_msgs.msg import Board, HandDetected, Move, Piece, RobotMove
 
-from checkers_game.camera.board_detection import DEBUG_MODE, BoardDetection
+from checkers_game.camera.board_detection import BoardDetection
 from checkers_game.camera.ximea_camera import XimeaCamera
 from checkers_game.checkers.board import Board as BoardView
 from checkers_game.checkers.game import HUMAN, ROBOT, Game
 from checkers_game.checkers.rules import DRAW, color_name, square_name
 from checkers_game.checkers.rules import GameState as RulesState
 from checkers_game.constants import HEIGHT, WIDTH
+from checkers_game.ui.dashboard import Dashboard
 
 try:  # mediapipe is optional - without it we rely on motion detection only
     import mediapipe as mp
@@ -80,7 +84,7 @@ def print_grid(title, grid, highlight=()):
 class CheckersNode(Node):
     def __init__(self):
         super().__init__('checkers_game')
-        self.declare_parameter('human_first', False)
+        self.declare_parameter('human_first', True)    # False = WCDF (black/robot first)
         self.declare_parameter('ai_time_limit', 4.0)
         self.declare_parameter('stable_time', 0.8)
         self.declare_parameter('motion_threshold', 1.5)
@@ -89,10 +93,11 @@ class CheckersNode(Node):
         print("INITIALIZING CHECKERS NODE")
         print("=" * 60)
 
+        # the board is drawn with pygame OFF-SCREEN and shown as one tile of
+        # the single dashboard window (ui/dashboard.py)
         pygame.init()
-        self.WIN = pygame.display.set_mode((WIDTH, HEIGHT))
-        pygame.display.set_caption("Checkers")
-        self.clock = pygame.time.Clock()
+        self.board_surface = pygame.Surface((WIDTH, HEIGHT))
+        self.dashboard = Dashboard()
         self.FPS = 30
 
         print("Creating camera connection...")
@@ -140,6 +145,11 @@ class CheckersNode(Node):
         self.latest_grid = None
         self.last_image = None
         self.ref_stale = False
+        # dashboard state
+        self.banner = ("Set up the START position, then press S", "info")
+        self.details = []
+        self.tiles = (None, None)          # (camera+hands, detection)
+        self.unsure = 0
 
         self.board_publisher = self.create_publisher(Board, '/board_topic', 10)
         self.move_publisher = self.create_publisher(Move, '/move_topic', 10)
@@ -199,13 +209,13 @@ class CheckersNode(Node):
             return
         self.game_state = GameState.PLAYER_TURN
         print("→ Your turn (WHITE). Move, then take your hand off the board.\n")
+        self._your_turn_banner()
 
     # ------------------------------------------------------------ main loop
     def update(self):
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                self._shutdown()
-                return
+        if not self.dashboard.is_open():
+            self._shutdown()
+            return
         image = self._grab()
         if image is None:
             return
@@ -215,8 +225,9 @@ class CheckersNode(Node):
         if self.game.started and (self.game_state == GameState.ROBOT_MOVING
                                   or self.verify_after_robot):
             expected = self.game.expected_grid()
-        grid = self.boardDetection.get_board(image, expected=expected)
-        grid = np.asarray(grid, dtype=int)
+        res = self.boardDetection.analyse(image, expected=expected)
+        grid = np.asarray(res["grid"], dtype=int)
+        self.unsure = int(((grid == 3) | (grid == -1)).sum())
         # follow lighting changes (lamp on/off): gentle exposure correction,
         # never while the robot or a hand is over the board
         if (self.game_state != GameState.ROBOT_MOVING
@@ -227,9 +238,10 @@ class CheckersNode(Node):
         self.latest_grid = grid
         self._track_stability(image, grid)
 
-        hand = self.detect_hand(image)
+        hand, cam_tile = self.detect_hand(image)
         if hand:
             self.last_hand_time = time.time()
+        self.tiles = (cam_tile, self.boardDetection._overlay(res))
 
         key = cv2.waitKey(1) & 0xFF
         self._handle_key(key, grid)
@@ -268,6 +280,7 @@ class CheckersNode(Node):
                    ord('3'): Difficulty.HARD}[key]
             self.difficulty_level = lvl.value
             print(f"\n★ Difficulty: {lvl.name} (level {lvl.value})")
+            self.details = [f"Difficulty: {lvl.name} (level {lvl.value})"]
         elif key in (ord('s'), ord('S')):
             self._start_game(grid, force=False)
         elif key in (ord('f'), ord('F')):
@@ -282,7 +295,7 @@ class CheckersNode(Node):
                 print("\n[R] robot move marked as finished manually")
                 self._robot_finished()
         elif key in (ord('h'), ord('H')):
-            self._print_hints()
+            self._print_hints(to_ui=True)
         elif key in (ord('q'), ord('Q')):
             self._shutdown()
 
@@ -297,6 +310,9 @@ class CheckersNode(Node):
                 print("\n✗ Cannot start from this position - the camera is not sure about "
                       + ", ".join(square_name(q) for q in unsure))
                 print_grid("detected board", grid, unsure)
+                self._ui("Cannot start here - camera unsure about some squares", "error",
+                         ["Unsure: " + ", ".join(square_name(q) for q in unsure),
+                          "More light, or nudge those pieces, then press F again."])
                 return
             self.game.start_from_grid(grid, turn=HUMAN)
             print("\nGAME STARTED from the detected position - your move (WHITE)")
@@ -307,6 +323,8 @@ class CheckersNode(Node):
                 print_grid("detected board", grid)
                 print("  Fix the pieces / detection and press S again "
                       "(or F to start from this position anyway).")
+                self._ui("Not the start position - fix the pieces and press S", "error",
+                         [msg, "Or press F to start from the position on the board."])
                 return
             self.game.start_standard(dark_parity=parity)
             self.view.dark_parity = parity
@@ -328,6 +346,7 @@ class CheckersNode(Node):
         else:
             self.game_state = GameState.PLAYER_TURN
             print("→ Your move (WHITE)")
+            self._your_turn_banner(["Game started - English checkers, captures are mandatory."])
 
     # ------------------------------------------------------------ player
     @staticmethod
@@ -363,6 +382,10 @@ class CheckersNode(Node):
                 print("  → Fix the physical board (or the robot's placement); the board is")
                 print("    re-checked automatically.")
                 self.highlight = bad
+                self._ui("Board does not match after the robot's move", "warn",
+                         ["Check the squares outlined red: "
+                          + ", ".join(square_name(q) for q in bad),
+                          "Put the pieces where the game board shows them."])
                 self.ref_stale = True
                 # until the board is put right, don't explain the robot's
                 # misplaced piece away as detection noise
@@ -377,6 +400,10 @@ class CheckersNode(Node):
                 self.ref_stale = False
                 self.game.max_noise_squares = 1
                 print("✓ Board matches the game again")
+                self._your_turn_banner(["Board matches the game again."])
+            elif self.banner[1] == "error":
+                # an invalid move was put back
+                self._your_turn_banner()
             return
         if not inf.accepted:
             self._report_invalid(inf, grid)
@@ -386,6 +413,7 @@ class CheckersNode(Node):
             # looks like a multi-jump stopped half way - maybe the player is
             # just pausing between jumps: give them more time before huffing
             self.last_checked_sig = None
+            self._ui("Finish your jump - the piece can capture again", "warn", [])
             return
 
         self.highlight = []
@@ -395,10 +423,14 @@ class CheckersNode(Node):
         self.boardDetection.set_reference(self.last_image, self.game.expected_grid())
         self.last_move = inf.move
         print(f"\n✓ Your move: {inf.move}")
+        self.details = [f"Your move: {inf.move}"]
         if inf.kind == "huff":
             print("⚠ HUFF: " + inf.reason)
             print("  → The robot will remove one of: "
                   + ", ".join(square_name(q) for q in inf.huff_squares))
+            self.details = [f"Your move: {inf.move}", "HUFF: " + inf.reason,
+                            "The robot will remove one of: "
+                            + ", ".join(square_name(q) for q in inf.huff_squares)]
         self.publish_board_state()
 
         # with a huff pending the robot first removes a piece, which can
@@ -424,19 +456,39 @@ class CheckersNode(Node):
         self._print_hints()
         print("  Put the board right; it is re-checked automatically (or press SPACE).")
         self.highlight = inf.changed
+        details = [inf.reason]
+        if inf.closest is not None and len(inf.closest_diff) <= 2:
+            details.append(f"Closest legal move: {inf.closest}")
+            if inf.closest.captured and any(q in inf.closest.captured for q in inf.closest_diff):
+                details.append("Did you forget to take the captured piece off the board?")
+        if self.game.state.all_captures():
+            details.append("A capture is available - capturing is mandatory (H = hints).")
+        details.append("Put the board right - it is re-checked automatically.")
+        self._ui("MOVE NOT ACCEPTED", "error", details)
 
-    def _print_hints(self):
+    def _print_hints(self, to_ui=False):
         moves = self.game.hint_moves()
         if moves:
             caps = self.game.state.all_captures()
             print(f"  Your legal moves{' (CAPTURE IS MANDATORY)' if caps else ''}:")
             for m in moves:
                 print(f"    {m}")
+            if to_ui:
+                self.details = [("CAPTURE IS MANDATORY - " if caps else "") + "your legal moves:",
+                                "   ".join(moves)]
+
+    def _your_turn_banner(self, details=None):
+        caps = self.game.state is not None and self.game.state.all_captures()
+        text = ("YOUR MOVE (white) - you must CAPTURE" if caps
+                else "YOUR MOVE (white) - move, then take your hand away")
+        self._ui(text, "your_turn", details if details is not None else self.details)
 
     # ------------------------------------------------------------- robot
     def _robot_turn(self):
         print("\n" + "-" * 60)
         print(f"Robot thinking (level {self.difficulty_level}) ...")
+        self._ui("ROBOT THINKING ...", "robot")
+        self._render_now()
         t0 = time.time()
         plan = self.game.plan_robot_turn(level=self.difficulty_level,
                                          time_limit=self.ai_time_limit)
@@ -451,6 +503,13 @@ class CheckersNode(Node):
             self._game_over()
             return
         print(f"  Robot plays {plan.move}  ({time.time() - t0:.1f}s)")
+        robot_details = [f"Robot plays {plan.move}"]
+        if plan.huffed is not None:
+            robot_details.insert(0, f"Robot huffs (removes) your piece on {square_name(plan.huffed)}")
+        if plan.move.captured:
+            robot_details.append("It takes the captured pieces off itself.")
+        self._ui("ROBOT MOVING - keep your hands off the board", "robot",
+                 [d for d in self.details if d.startswith(("Your move", "HUFF"))] + robot_details)
         self.game.apply_robot(plan)
         self.last_move = plan.move
         self.publish_move(plan)
@@ -471,49 +530,91 @@ class CheckersNode(Node):
         print("=" * 60)
         print("Moves:\n  " + "\n  ".join(self.game.log))
         print("\nSet up the start position and press S for a new game.\n")
+        if w == DRAW:
+            text = "GAME OVER - DRAW"
+        else:
+            text = f"GAME OVER - {'YOU WIN' if w == HUMAN else 'ROBOT WINS'}"
+        self._ui(text, "over", ["Set up the start position and press S for a new game."])
 
     # ------------------------------------------------------------ hand
     def detect_hand(self, image):
+        """(hand over the board?, camera image annotated with the board
+        outline and the hand skeleton)."""
+        vis = cv2.cvtColor(image, cv2.COLOR_BGRA2BGR) if image.shape[2] == 4 else image.copy()
+        corners = getattr(self.boardDetection, 'bounderies', None)
+        x0, y0, x1, y1 = self.boardDetection.board_bbox(margin=40)
+        if corners is not None:
+            cv2.polylines(vis, [np.asarray(corners, np.int32)], True, (0, 255, 0), 2)
         if self.hands is None:
-            return False
-        rgb = cv2.cvtColor(image, cv2.COLOR_BGRA2RGB if image.shape[2] == 4 else cv2.COLOR_BGR2RGB)
+            return False, vis
+        rgb = cv2.cvtColor(vis, cv2.COLOR_BGR2RGB)
         results = self.hands.process(rgb)
         if not results.multi_hand_landmarks:
-            return False
+            return False, vis
         h, w = rgb.shape[:2]
-        x0, y0, x1, y1 = self.boardDetection.board_bbox(margin=40)
         over = False
         for lm in results.multi_hand_landmarks:
             xs = [p.x * w for p in lm.landmark]
             ys = [p.y * h for p in lm.landmark]
-            if min(xs) < x1 and max(xs) > x0 and min(ys) < y1 and max(ys) > y0:
-                over = True
-            if DEBUG_MODE:
-                self.mp_drawing.draw_landmarks(rgb, lm, self.mp_hands.HAND_CONNECTIONS)
-        if DEBUG_MODE:
-            cv2.rectangle(rgb, (int(x0), int(y0)), (int(x1), int(y1)), (0, 255, 0), 2)
-            cv2.imshow("Hand Tracking", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
-        return over
+            hit = min(xs) < x1 and max(xs) > x0 and min(ys) < y1 and max(ys) > y0
+            over = over or hit
+            self.mp_drawing.draw_landmarks(vis, lm, self.mp_hands.HAND_CONNECTIONS)
+            cv2.rectangle(vis, (int(min(xs)), int(min(ys))), (int(max(xs)), int(max(ys))),
+                          (0, 0, 255) if hit else (255, 200, 0), 2)
+        if over:
+            cv2.putText(vis, "HAND OVER BOARD", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.9,
+                        (0, 0, 255), 2, cv2.LINE_AA)
+        return over, vis
 
     # ------------------------------------------------------------ drawing
-    def _draw(self, grid):
+    def _ui(self, text, kind="info", details=None):
+        """Set the dashboard banner (and the detail lines under it)."""
+        self.banner = (text, kind)
+        if details is not None:
+            self.details = list(details)
+
+    def _board_image(self, grid):
         if self.game.started:
-            self.view.draw(self.WIN, self.game.state, last_move=self.last_move,
+            self.view.draw(self.board_surface, self.game.state, last_move=self.last_move,
                            highlight=self.highlight, detected=grid)
         else:
             # before the game starts show the raw detection
-            self.view.draw(self.WIN, RulesState.from_grid(grid))
-        pygame.display.set_caption(self._caption())
-        pygame.display.update()
+            self.view.draw(self.board_surface, RulesState.from_grid(grid))
+        rgb = pygame.surfarray.array3d(self.board_surface).swapaxes(0, 1)
+        return cv2.cvtColor(np.ascontiguousarray(rgb), cv2.COLOR_RGB2BGR)
 
-    def _caption(self):
-        if self.game_state == GameState.WAITING_FOR_START:
-            return "Checkers - press S to start"
-        if self.game_state == GameState.GAME_OVER:
-            return f"Checkers - GAME OVER: {self.game.winner_text()}"
-        if self.game_state == GameState.ROBOT_MOVING:
-            return "Checkers - robot moving"
-        return "Checkers - your move (white)"
+    def _draw(self, grid=None):
+        if grid is None:
+            grid = self.latest_grid if self.latest_grid is not None else np.zeros((8, 8), int)
+        now = time.time()
+        settled_for = min(now - self.grid_stable_since, now - self.last_motion_time,
+                          now - self.last_hand_time - self.HAND_COOLDOWN + self.stable_time)
+        st = self.game.state
+        facts = [
+            ("turn", "-" if not st else
+             "BLACK (robot) moving" if self.game_state == GameState.ROBOT_MOVING else
+             "game over" if self.game_state == GameState.GAME_OVER else
+             ("WHITE (you)" if st.turn == HUMAN else "BLACK (robot)")),
+            ("level", self.difficulty_level),
+            ("pieces", "-" if not st else f"W {st.count(HUMAN)}  B {st.count(ROBOT)}"),
+            ("exposure", f"{getattr(self.ximeaCamera, 'exposure_us', 0) / 1000:.0f} ms"),
+            ("unsure sq.", self.unsure),
+            ("motion", f"{self.motion:.1f} %"),
+        ]
+        status = {
+            "banner": self.banner,
+            "details": self.details,
+            "facts": facts,
+            "stability": settled_for / max(self.stable_time, 1e-3),
+            "log": self.game.log,
+            "keys": "S start  F force  1/2/3 level  SPACE re-check  R robot done  H hints  Q quit",
+        }
+        self.dashboard.render(self._board_image(grid), self.tiles[0], self.tiles[1], status)
+
+    def _render_now(self):
+        """Refresh the window before a blocking step (AI search)."""
+        self._draw()
+        cv2.waitKey(1)
 
     # ----------------------------------------------------------- messages
     @staticmethod
@@ -552,6 +653,10 @@ class CheckersNode(Node):
 
     def _shutdown(self):
         self.capture_running = False
+        try:
+            cv2.destroyAllWindows()
+        except cv2.error:
+            pass
         try:
             pygame.quit()
         finally:

@@ -104,6 +104,8 @@ def install_stubs(monkeypatch):
     monkeypatch.setattr(cv2, "createTrackbar", lambda *a, **k: None)
     monkeypatch.setattr(cv2, "getTrackbarPos", lambda *a, **k: 2)
     monkeypatch.setattr(cv2, "setMouseCallback", lambda *a, **k: None)
+    monkeypatch.setattr(cv2, "resizeWindow", lambda *a, **k: None)
+    monkeypatch.setattr(cv2, "getWindowProperty", lambda *a, **k: 1.0)
     monkeypatch.setattr(cv2, "waitKey", lambda *a, **k: keys.pop(0) if keys else 255)
     return keys
 

@@ -318,8 +318,8 @@ def generate_launch_description():
             output='screen',
             parameters=[{
                 'use_sim_time': False,
-                # English draughts (WCDF): black = robot moves first
-                'human_first': False,
+                # True: the human (white) starts; False: WCDF rule, black (robot) starts
+                'human_first': True,
                 'ai_time_limit': 4.0,     # s per robot move
                 'stable_time': 0.8,       # s the board must be still before a move is read
             }]

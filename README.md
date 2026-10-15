@@ -372,7 +372,7 @@ zSafeTransition = 0.25; // Height for transitions between positions
 
 ROS parameters of `checkers_node`:
 ```
-human_first      false   # WCDF: black (robot) moves first
+human_first      true    # false = WCDF order: black (robot) moves first
 ai_time_limit    4.0     # seconds per robot move
 stable_time      0.8     # board must be still this long before a move is read
 motion_threshold 1.5     # % of changed pixels that counts as motion
@@ -383,7 +383,7 @@ motion_threshold 1.5     # % of changed pixels that counts as motion
 ## System Flow
 
 ```
-1. S pressed with the start position -> robot (black) moves first (WCDF)
+1. S pressed with the start position -> you (white) move first
 2. Human moves a white piece and takes the hand away; when the detected
    board has been still for stable_time the move is matched against every
    legal move (and every huff-able one)
@@ -408,7 +408,8 @@ motion_threshold 1.5     # % of changed pixels that counts as motion
 - **Capturing is mandatory**; with several captures any one may be chosen.
 - A multi-jump must be completed; a piece cannot be jumped twice.
 - A man reaching the last row is crowned and **the move ends** there.
-- Black (robot) moves first. No pieces or no legal move = loss.
+- The human (white) moves first by default (`human_first:=false` gives the
+  WCDF order, black/robot first). No pieces or no legal move = loss.
 - Draw: 40 moves each without capture or man move, or 3-fold repetition.
 - **Huff rule**: if the human plays a non-capturing move while a capture was
   available (or stops a multi-jump early) the move stands, but the robot
@@ -417,6 +418,14 @@ motion_threshold 1.5     # % of changed pixels that counts as motion
 
 Code: `checkers/rules.py` (engine), `checkers/game.py` (game flow, move
 inference from the camera), `minimax/algorithm.py` (alpha-beta AI).
+
+### The game window
+One window ("Checkers", resizable) during the game: the game board (the
+position the game believes in, last move in blue, problem squares red, small
+dots = what the camera sees on each square), the camera with the board
+outline and hand tracking, the rectified detection view, and a panel with
+status, how still the board is, exposure, the move list and the keys.
+The startup calibration steps still use their own windows.
 
 ### Vision
 - `camera/board_geometry.py` - board corners from the squares' lattice.
