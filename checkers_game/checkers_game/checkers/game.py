@@ -90,7 +90,15 @@ class Game:
         return self.state
 
     def start_from_grid(self, grid, turn=None, kings=()):
-        """Start (or resume) from a detected position."""
+        """Start (or resume) from a detected position.  Men standing on
+        their crowning row are kings (they can only have got there that
+        way)."""
+        kings = set(kings)
+        for c in range(8):
+            if int(grid[0][c]) == D_WHITE:
+                kings.add((0, c))
+            if int(grid[7][c]) == D_BLACK:
+                kings.add((7, c))
         self.state = GameState.from_grid(grid, turn or self.first, kings)
         self._reset_history()
         return self.state
@@ -157,13 +165,18 @@ class Game:
         return out
 
     # ------------------------------------------------------ human move input
-    def _compare(self, after, grid):
+    def _compare(self, after, grid, touched=()):
+        """Squares where `grid` contradicts the position `after`.
+        An unknown reading is ignored - except on a square the move touches
+        (start, landing squares, captured pieces): those must be seen."""
         occ_diff, col_diff = [], []
         for r in range(8):
             for c in range(8):
                 v = after.at(r, c)
                 d = int(grid[r][c])
                 if d == D_UNKNOWN:
+                    if (r, c) in touched:
+                        occ_diff.append((r, c))
                     continue
                 if (v != 0) != (d != 0):
                     occ_diff.append((r, c))
@@ -196,13 +209,15 @@ class Game:
         cands += [(m, "huff") for m in s.huffable_moves()]
         scored = []
         seen = set()
+        after_of = {}
         for m, kind in cands:
             after = s.apply(m)
+            after_of[id(m)] = after
             if after.key() in seen:      # e.g. a king taking the same pieces in another order
                 continue
             seen.add(after.key())
-            occ_diff, col_diff = self._compare(after, grid)
             touched = set(m.path) | set(m.captured)
+            occ_diff, col_diff = self._compare(after, grid, touched)
             scored.append((len(occ_diff), len(col_diff), 0 if kind == "legal" else 1,
                            m, kind, occ_diff, col_diff, touched))
         scored.sort(key=lambda t: (t[0], t[1], t[2]))
@@ -214,11 +229,22 @@ class Game:
             # every square the move touches must agree; tolerate a little
             # detection noise elsewhere when the match is unambiguous
             ambiguous = (len(scored) > 1 and scored[1][0] == n_occ and scored[1][1] == n_col)
+            # tolerated noise: a piece the camera missed (reads empty where
+            # the position has a piece) away from the move - never a piece
+            # that appeared somewhere (that could be the real, illegal move)
+            # (and only an OPPONENT piece - the black pieces are the hard
+            # ones to see; a "missing" piece of the mover is a real change)
+            missed_only = all(int(grid[r][c]) == D_EMPTY
+                              and owner(after_of[id(m)].at(r, c)) == -s.turn
+                              for r, c in occ_diff)
             noise_ok = not ambiguous and (n_occ == 0 or
                         (n_occ <= self.max_noise_squares
+                         and missed_only
                          and not (set(occ_diff) & touched)
                          and second >= n_occ + 2))
-            if noise_ok and n_col <= self.color_tolerance:
+            # the moved piece itself must not read as the other colour
+            colour_ok = n_col <= self.color_tolerance and not (set(col_diff) & touched)
+            if noise_ok and colour_ok:
                 inf = Inference(kind, m, noise_squares=occ_diff + col_diff, changed=changed)
                 if kind == "huff":
                     cls = s.classify_move(m)

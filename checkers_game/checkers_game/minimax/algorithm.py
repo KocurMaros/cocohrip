@@ -140,7 +140,7 @@ class Searcher:
                 break
         if best_move is None:          # timed out even at depth 1
             best_move = ordered[0]
-            best_score = 0
+            best_score = evaluate(state, state.turn)
         return best_move, best_score, reached
 
 
@@ -154,7 +154,8 @@ def choose_huff(state, candidates, level=3, time_limit=1.5, rng=None):
     leaves the side to move best off.  Returns a square."""
     if len(candidates) <= 1:
         return candidates[0] if candidates else None
-    s = Searcher(time_limit, rng)
+    # the time budget is shared by all candidates
+    s = Searcher(time_limit / len(candidates) if time_limit else None, rng)
     depth = max(1, depth_for_level(level) - 2)
     best_sq, best_val = None, None
     for sq in candidates:

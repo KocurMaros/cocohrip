@@ -832,9 +832,12 @@ void RobotControlNode::ros_out_callback(const rcl_interfaces::msg::Log::SharedPt
                 RCLCPP_INFO(this->get_logger(), "✅ Robot reached HOME position");
                 
                 // Publish robot move done message - only when no pick/place
-                // pairs (captured / huffed pieces) are still pending
-                if (targetPositions.empty() || target_pose_index < 0 ||
-                    static_cast<std::size_t>(target_pose_index) >= targetPositions.size()) {
+                // pairs (captured / huffed pieces) are still pending, and not
+                // for the first leg of the final HOME (its thread publishes
+                // once moveToNamedTarget("home") is done)
+                if (!isFinalHome.load() &&
+                    (targetPositions.empty() || target_pose_index < 0 ||
+                     static_cast<std::size_t>(target_pose_index) >= targetPositions.size())) {
                     auto message = checkers_msgs::msg::RobotMove();
                     message.robot_move_done = true;
                     robotMovePub->publish(message);
@@ -1173,6 +1176,19 @@ std::vector<std::pair<geometry_msgs::msg::Pose, Task>> RobotControlNode::getPose
 
 void RobotControlNode::checkers_board_callback(const checkers_msgs::msg::Board::SharedPtr msg) {
     removeAllFakePieces();
+
+    // All 12 white pieces on the board -> none is in the storage area (new
+    // game): start filling the storage slots from the first one again.
+    int whitePieces = 0;
+    for (const auto& piece : msg->pieces) {
+        if (piece.color == whiteColorString) {
+            whitePieces++;
+        }
+    }
+    if (whitePieces == 12 && removedPiecesCount != 0) {
+        RCLCPP_INFO(this->get_logger(), "New game detected - storage area reset");
+        removedPiecesCount = 0;
+    }
 
     for (const auto& piece : msg->pieces) {
         auto [row, col] = rotate90DegreesCounterClockwise(piece.row, piece.col);

@@ -292,6 +292,12 @@ class CheckersNode(Node):
             print("Game already running")
             return
         if force:
+            unsure = [(r, c) for r in range(8) for c in range(8) if int(grid[r][c]) in (3, -1)]
+            if unsure:
+                print("\n✗ Cannot start from this position - the camera is not sure about "
+                      + ", ".join(square_name(q) for q in unsure))
+                print_grid("detected board", grid, unsure)
+                return
             self.game.start_from_grid(grid, turn=HUMAN)
             print("\nGAME STARTED from the detected position - your move (WHITE)")
         else:
@@ -308,6 +314,9 @@ class CheckersNode(Node):
             print("GAME STARTED - English draughts (WCDF) with huff rule")
             print("=" * 60)
         print(self.game.state.ascii())
+        self.verify_after_robot = False
+        self.ref_stale = False
+        self.game.max_noise_squares = 1
         self.boardDetection.set_reference(self.last_image, self.game.expected_grid())
         self.publish_board_state()
         self.last_checked_sig = self._sig(grid)
@@ -355,6 +364,9 @@ class CheckersNode(Node):
                 print("    re-checked automatically.")
                 self.highlight = bad
                 self.ref_stale = True
+                # until the board is put right, don't explain the robot's
+                # misplaced piece away as detection noise
+                self.game.max_noise_squares = 0
                 return
 
         if inf.kind == "no_change":
@@ -363,10 +375,17 @@ class CheckersNode(Node):
                 # board was put right after a robot problem
                 self.boardDetection.set_reference(self.last_image, self.game.expected_grid())
                 self.ref_stale = False
+                self.game.max_noise_squares = 1
                 print("✓ Board matches the game again")
             return
         if not inf.accepted:
             self._report_invalid(inf, grid)
+            return
+        if inf.kind == "huff" and inf.move.is_capture and \
+                time.time() - self.grid_stable_since < 3 * self.stable_time:
+            # looks like a multi-jump stopped half way - maybe the player is
+            # just pausing between jumps: give them more time before huffing
+            self.last_checked_sig = None
             return
 
         self.highlight = []
@@ -382,7 +401,9 @@ class CheckersNode(Node):
                   + ", ".join(square_name(q) for q in inf.huff_squares))
         self.publish_board_state()
 
-        if self.game.winner() is not None:
+        # with a huff pending the robot first removes a piece, which can
+        # change the outcome - _robot_turn() handles "robot has no move"
+        if not self.game.pending_huff and self.game.winner() is not None:
             self._game_over()
             return
         self._robot_turn()

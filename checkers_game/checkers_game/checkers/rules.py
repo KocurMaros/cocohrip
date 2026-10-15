@@ -369,7 +369,8 @@ class GameState:
         cells = list(self.cells)
         for (r, c) in squares:
             cells[_idx(r, c)] = 0
-        return GameState(cells, self.turn, self.quiet_plies)
+        # losing a piece is progress, like a capture
+        return GameState(cells, self.turn, 0 if squares else self.quiet_plies)
 
     # ------------------------------------------------------------- outcome
     def winner(self):
