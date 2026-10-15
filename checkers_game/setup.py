@@ -11,10 +11,12 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*launch.[pxy][yma]*')))
+        (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*launch.[pxy][yma]*'))),
+        (os.path.join('share', package_name, 'assets'), glob(os.path.join(package_name, 'assets', '*.png'))),
     ],
-    package_data={package_name: ['assets/*.png', 'camera/*.npz']},
-    include_package_data=True,
+    # camera/ is a python package -> its calibration files go in as package
+    # data; assets/ is not a package -> installed to share/ (see data_files)
+    package_data={package_name + '.camera': ['*.npz']},
     install_requires=['setuptools', 'mediapipe'],
     zip_safe=True,
     maintainer='jozef',

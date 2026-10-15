@@ -24,8 +24,13 @@ def resource_path(*parts):
     Works both when installed (share/ or site-packages) and when the node is
     started from ~/<ws> with the source tree in src/ (the old hard-coded
     'src/checkers_game/checkers_game/...' relative path)."""
-    candidates = [
-        os.path.join(_PKG_DIR, *parts),
+    candidates = [os.path.join(_PKG_DIR, *parts)]
+    try:  # installed by colcon: share/checkers_game/<parts> (assets/)
+        from ament_index_python.packages import get_package_share_directory
+        candidates.append(os.path.join(get_package_share_directory("checkers_game"), *parts))
+    except Exception:  # noqa: BLE001 - not in a ROS environment / not installed
+        pass
+    candidates += [
         os.path.join(os.getcwd(), "src", "checkers_game", "checkers_game", *parts),
         os.path.join(os.getcwd(), "src", "cocohrip", "checkers_game", "checkers_game", *parts),
     ]
