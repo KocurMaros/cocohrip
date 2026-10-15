@@ -272,20 +272,26 @@ This will:
 3. Pick up WHITE piece at (3,4) - the captured piece
 4. Place it in the storage area on the side
 
-### Storage Area for Captured Pieces
+### Board placement and storage area (robot_control parameters)
 
-Captured pieces are stored in columns of 4 pieces each:
+The robot computes every square from two measured points (TCP over the
+centre of the dark corner squares, same frame the robot moves in), set in
+`robot_control/launch/new_launch.py`:
 
 ```
-Storage Layout (beside the board):
-Column 0: pieces 0-3
-Column 1: pieces 4-7  
-Column 2: pieces 8-11
-
-Physical location:
-  row = 9 + (piece_number % 4)
-  col = piece_number / 4
+board_h8_xy: [1.1099, 0.4478]   # H8: black piece, corner closest to the robot
+board_a1_xy: [0.7191, 0.0458]   # A1: white piece, corner farthest from the robot
+z_attach:    0.155              # grasp height
 ```
+After moving the board, re-measure these two points; a rotated board is
+handled (the square size and yaw come from the two points). Also re-check the
+camera corners at startup (press `A` in the grid-check window).
+
+Captured / huffed white pieces go beside the **a-file edge**, 2 columns x 6
+slots (`storage_first_col` -1.8, `storage_col_step` -1.1 squares,
+`storage_rows` 6). The slot positions are printed when robot_control starts.
+The slots restart from the first one when a board with 12 white pieces is
+published (new game).
 
 ---
 

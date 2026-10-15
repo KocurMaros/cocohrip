@@ -1,5 +1,6 @@
 #include "robot_control/RobotControlNode.hpp"
 #include "robot_control/RobotPoseUtility.hpp"
+#include <cmath>
 
 using namespace std::chrono_literals;
 
@@ -49,31 +50,27 @@ RobotControlNode::RobotControlNode()
 
     std::this_thread::sleep_for(std::chrono::seconds(1));
 
-    // Real-world measured board corners (center of corner squares)
-    // Closest to robot (bottom-right corner at position 7,7)
-    //float corner_near_x = 0.8736;
-    //float corner_near_y = 0.4882+0.01;
-    
-    // Farthest from robot (top-left corner at position 0,0)
-    //float corner_far_x = 0.4711;
-    //float corner_far_y = 0.0866+0.01;
-    
-    float corner_near_x = 0.8736+0.02+(0.0005*2);
-    float corner_near_y = 0.4882+0.01-0.015;
-    
-    // Farthest from robot (top-left corner)
-    float corner_far_x = 0.4711+0.02+(0.0005*2);
-    float corner_far_y = 0.0866+0.01-0.015;
+    // Real-world measured board corners: centre of the dark corner squares,
+    // TCP positions read with the gripper over the piece.
+    //   board_h8_xy: H8 = game (0,7), black piece, closest to the robot
+    //   board_a1_xy: A1 = game (7,0), white piece, farthest from the robot
+    // 2026-10-15 (board moved): H8 [1.1099, 0.4478, 0.1643], A1 [0.7191, 0.0458, 0.1607]
+    // (previous placement: H8 [0.8946, 0.4832], A1 [0.4921, 0.0816])
+    auto h8 = this->declare_parameter<std::vector<double>>("board_h8_xy", {1.1099, 0.4478});
+    auto a1 = this->declare_parameter<std::vector<double>>("board_a1_xy", {0.7191, 0.0458});
+    storageFirstCol = this->declare_parameter<double>("storage_first_col", -1.8);
+    storageColStep = this->declare_parameter<double>("storage_col_step", -1.1);
+    storageRows = static_cast<int>(this->declare_parameter<int64_t>("storage_rows", 6));
+    if (h8.size() < 2 || a1.size() < 2 || storageRows < 1) {
+        RCLCPP_ERROR(this->get_logger(), "board_h8_xy / board_a1_xy need 2 values, storage_rows >= 1 - using defaults");
+        h8 = {1.1099, 0.4478};
+        a1 = {0.7191, 0.0458};
+        storageRows = 6;
+    }
+    computeBoardGeometry(h8[0], h8[1], a1[0], a1[1]);
 
-    // Calculate square size from measured corners
-    square_size = (corner_near_x - corner_far_x) / 7.0;  // Distance across 7 squares
-    
-    // Calculate board offsets (position of square 0,0 center)
-    boardOffsetX = corner_far_x;
-    boardOffsetY = corner_far_y;
-    
     // Z heights
-    zAttach = 0.155;  // End effector offset - minimum safe height
+    zAttach = this->declare_parameter<double>("z_attach", 0.155);  // grasp height (min safe Z = 0.155m)
     zMoving = 0.20;   // Safe moving height above board (raised to 20cm to avoid hitting pieces)
     zSafeTransition = 0.25;  // Safe transition height for movements between squares (25cm)
     
@@ -81,6 +78,11 @@ RobotControlNode::RobotControlNode()
     RCLCPP_INFO(this->get_logger(), "  Calculated square size: %.4f m", square_size);
     RCLCPP_INFO(this->get_logger(), "  Board offset X: %.4f m", boardOffsetX);
     RCLCPP_INFO(this->get_logger(), "  Board offset Y: %.4f m", boardOffsetY);
+    RCLCPP_INFO(this->get_logger(), "  Board yaw: %.2f deg, A1 (%.4f, %.4f)", boardYaw * 180.0 / M_PI, a1X, a1Y);
+    for (int k : {0, storageRows - 1, 2 * storageRows - 1}) {
+        auto [sx, sy] = missionToXY(STORAGE_ROW_BASE + k, 0);
+        RCLCPP_INFO(this->get_logger(), "  Storage slot %d: (%.4f, %.4f)", k, sx, sy);
+    }
     RCLCPP_INFO(this->get_logger(), "  Z attach height: %.4f m", zAttach);
     RCLCPP_INFO(this->get_logger(), "  Z moving height: %.4f m", zMoving);
 }
@@ -137,8 +139,8 @@ bool RobotControlNode::moveToSafeApproachPosition() {
     RCLCPP_INFO(this->get_logger(), "Moving to safe approach position 20cm above chessboard center...");
     
     // Calculate center of chessboard
-    float center_x = boardOffsetX + (3.5 * square_size);  // Middle of 8x8 board
-    float center_y = boardOffsetY + (3.5 * square_size);
+    float center_x = static_cast<float>(a1X + (3.5 - 7.0) * urX + 3.5 * ucX);  // Middle of 8x8 board
+    float center_y = static_cast<float>(a1Y + (3.5 - 7.0) * urY + 3.5 * ucY);
     float approach_z = 0.30;  // 20cm above board surface (board at ~0.10m)
     
     geometry_msgs::msg::Pose approach_pose;
@@ -217,11 +219,12 @@ void RobotControlNode::mainLoop() {
         
         if (current_pose_opt) {
             // Get target position of first mission
-            float target_x = boardOffsetX + (3.5 * square_size);
-            float target_y = boardOffsetY + (3.5 * square_size);
+            float target_x = static_cast<float>(a1X + (3.5 - 7.0) * urX + 3.5 * ucX);
+            float target_y = static_cast<float>(a1Y + (3.5 - 7.0) * urY + 3.5 * ucY);
             if (!targetPositions.empty()) {
-                target_x = (targetPositions[0].row * square_size) + boardOffsetX;
-                target_y = (targetPositions[0].col * square_size) + boardOffsetY;
+                auto [tx, ty] = missionToXY(targetPositions[0].row, targetPositions[0].col);
+                target_x = static_cast<float>(tx);
+                target_y = static_cast<float>(ty);
             }
             
             double distance_to_target = std::sqrt(
@@ -998,32 +1001,22 @@ void RobotControlNode::checkers_move_callback(const checkers_msgs::msg::Move::Sh
     for (const auto& piece : msg->removed_pieces) {
         auto [row, col] = rotate90DegreesCounterClockwise(piece.row, piece.col);
         
-        // FIXED: Storage area layout - pieces stored in rows next to the board
-        // Row 8 = first storage row (off board), columns 0-3 for first 4 pieces
-        // Row 9 = second storage row, columns 0-3 for next 4 pieces
-        // This creates a 3x4 grid of storage positions next to the board
-        int storage_row_offset = removedPiecesCount / 4;  // Which row (0, 1, 2)
-        int storage_col_offset = removedPiecesCount % 4;  // Which column within row (0-3)
-        
-        // Storage position: row 8+ (off board), columns spread out
-        int storage_row = 8 + storage_row_offset;  // Rows 8, 9, 10 (off board side)
-        int storage_col = storage_col_offset;       // Columns 0, 1, 2, 3
-        
-        // Add bounds checking for storage positions (max 3 rows of 4 pieces = 12 pieces)
-        if (storage_row_offset > 2) {
+        // Storage beside the a-file edge (see missionToXY / storage_* params):
+        // slot k -> mission row STORAGE_ROW_BASE + k.  2 columns of storageRows.
+        const int slot = removedPiecesCount;
+        if (slot >= 2 * storageRows) {
             RCLCPP_ERROR(this->get_logger(), "Storage area full! Cannot store more pieces.");
             continue;
         }
-        
-        RCLCPP_INFO(this->get_logger(), 
-                   "Storage calculation: piece #%d -> storage[row=%d, col=%d]", 
-                   removedPiecesCount, storage_row, storage_col);
+        const int storage_row = STORAGE_ROW_BASE + slot;
+        const int storage_col = 0;
+        auto [storeX, storeY] = missionToXY(storage_row, storage_col);
         
         removedPiecesCount++;
         
         RCLCPP_INFO(this->get_logger(), 
-                   "Storing removed piece from board[%d, %d] to storage[%d, %d]", 
-                   row, col, storage_row, storage_col);
+                   "Storing removed piece from board[%d, %d] to storage slot %d (%.4f, %.4f)", 
+                   row, col, slot, storeX, storeY);
 
         targetPositions.push_back(Mission(row, col, whiteColorString, Task::ATTACH));
         targetPositions.push_back(Mission(storage_row, storage_col, whiteColorString, Task::DETACH));
@@ -1040,30 +1033,66 @@ void RobotControlNode::checkers_move_callback(const checkers_msgs::msg::Move::Sh
         RCLCPP_INFO(this->get_logger(), "Prepared trajectory with %zu poses", trajectory_list.size());
     }
 }
+void RobotControlNode::computeBoardGeometry(double h8x, double h8y, double a1x, double a1y) {
+    // H8 = game (0,7), A1 = game (7,0):  H8 - A1 = 7 * (u_c - u_r).
+    // Square board, not mirrored: u_c = u_r rotated by +90 deg, i.e.
+    // u_c = (-u_r.y, u_r.x).  Solving d = u_c - u_r for u_r gives:
+    const double dx = (h8x - a1x) / 7.0;
+    const double dy = (h8y - a1y) / 7.0;
+    urX = 0.5 * (dy - dx);
+    urY = -0.5 * (dx + dy);
+    ucX = -urY;
+    ucY = urX;
+    a1X = a1x;
+    a1Y = a1y;
+    square_size = static_cast<float>(std::sqrt(urX * urX + urY * urY));
+    boardYaw = std::atan2(ucY, ucX);
+    auto [ox, oy] = missionToXY(0, 0);
+    boardOffsetX = static_cast<float>(ox);
+    boardOffsetY = static_cast<float>(oy);
+}
+
+std::pair<double, double> RobotControlNode::missionToXY(int row, int col) const {
+    double gameRow, gameCol;
+    if (row >= STORAGE_ROW_BASE) {
+        // storage slot beside the a-file edge (outside the board)
+        const int k = row - STORAGE_ROW_BASE;
+        gameRow = static_cast<double>(k % storageRows);
+        gameCol = storageFirstCol + static_cast<double>(k / storageRows) * storageColStep;
+    } else {
+        // mission (row, col) = rotate90DegreesCounterClockwise(r, c) = (c, 7 - r)
+        gameRow = 7.0 - col;
+        gameCol = row;
+    }
+    return {a1X + (gameRow - 7.0) * urX + gameCol * ucX,
+            a1Y + (gameRow - 7.0) * urY + gameCol * ucY};
+}
+
 std::vector<std::pair<geometry_msgs::msg::Pose, Task>> RobotControlNode::getPoseList(Mission mission) {
     trajectory_pose_index = 0;
     std::vector<std::pair<geometry_msgs::msg::Pose, Task>> poses;
 
-    float posX = (mission.row * square_size) + boardOffsetX;
-    float posY = (mission.col * square_size) + boardOffsetY;
+    auto [targetX, targetY] = missionToXY(mission.row, mission.col);
+    float posX = static_cast<float>(targetX);
+    float posY = static_cast<float>(targetY);
     
-    // SAFETY CHECK: Validate coordinates are within reasonable bounds
-    float min_x = boardOffsetX - square_size;  // Allow 1 square beyond board
-    float max_x = boardOffsetX + (9 * square_size);  // Board + 1 extra square
-    float min_y = boardOffsetY - square_size;
-    float max_y = boardOffsetY + (9 * square_size);
-    
-    if (posX < min_x || posX > max_x || posY < min_y || posY > max_y) {
+    // SAFETY CHECK: the target must lie on the board or the storage area
+    // next to it: within 8 squares of the board centre (board corner squares
+    // are ~5 squares away, storage slots ~7.3)
+    const double centerX = a1X + (3.5 - 7.0) * urX + 3.5 * ucX;
+    const double centerY = a1Y + (3.5 - 7.0) * urY + 3.5 * ucY;
+    const double maxDist = 8.0 * square_size;
+    const double distFromCenter = std::hypot(posX - centerX, posY - centerY);
+    if (distFromCenter > maxDist) {
         RCLCPP_ERROR(this->get_logger(), 
-                    "Target position OUT OF BOUNDS! Row=%d, Col=%d -> X=%.4f, Y=%.4f",
-                    mission.row, mission.col, posX, posY);
-        RCLCPP_ERROR(this->get_logger(), 
-                    "Valid range: X[%.4f to %.4f], Y[%.4f to %.4f]",
-                    min_x, max_x, min_y, max_y);
+                    "Target position OUT OF BOUNDS! Row=%d, Col=%d -> X=%.4f, Y=%.4f "
+                    "(%.3f m from board centre, limit %.3f m)",
+                    mission.row, mission.col, posX, posY, distFromCenter, maxDist);
         
-        // Clamp to valid range
-        posX = std::max(min_x, std::min(max_x, posX));
-        posY = std::max(min_y, std::min(max_y, posY));
+        // Clamp onto the allowed circle
+        const double k = maxDist / distFromCenter;
+        posX = static_cast<float>(centerX + (posX - centerX) * k);
+        posY = static_cast<float>(centerY + (posY - centerY) * k);
         
         RCLCPP_WARN(this->get_logger(), "Clamped to: X=%.4f, Y=%.4f", posX, posY);
     }
@@ -1227,8 +1256,9 @@ void RobotControlNode::createFakePieceWithColor(const std::string& object_id, in
     fakePiece.type = visualization_msgs::msg::Marker::CYLINDER;
     fakePiece.action = visualization_msgs::msg::Marker::ADD;
 
-    fakePiece.pose.position.x = (row * square_size) + boardOffsetX;
-    fakePiece.pose.position.y = (col * square_size) + boardOffsetY;
+    auto [fakeX, fakeY] = missionToXY(row, col);
+    fakePiece.pose.position.x = fakeX;
+    fakePiece.pose.position.y = fakeY;
     fakePiece.pose.position.z = 0.0075;
     fakePiece.pose.orientation.w = 1.0;
 
@@ -1297,8 +1327,9 @@ void RobotControlNode::createPiece(int row, int col) {
     primitive.dimensions[primitive.CYLINDER_HEIGHT] = 0.005;
     primitive.dimensions[primitive.CYLINDER_RADIUS] = 0.014;
 
-    float posX = (row * square_size) + boardOffsetX;
-    float posY = (col * square_size) + boardOffsetY;
+    auto [pieceX, pieceY] = missionToXY(row, col);
+    float posX = static_cast<float>(pieceX);
+    float posY = static_cast<float>(pieceY);
 
     geometry_msgs::msg::Pose cylinder_pose;
     cylinder_pose.orientation.w = 1.0;
@@ -1345,10 +1376,13 @@ void RobotControlNode::publishCheckerboard() {
             square_marker.type = visualization_msgs::msg::Marker::CUBE;
             square_marker.action = visualization_msgs::msg::Marker::ADD;
 
-            square_marker.pose.position.x = (rotatedRow * square_size) + boardOffsetX;
-            square_marker.pose.position.y = (rotatedCol * square_size) + boardOffsetY;
+            auto [squareX, squareY] = missionToXY(rotatedRow, rotatedCol);
+            square_marker.pose.position.x = squareX;
+            square_marker.pose.position.y = squareY;
             square_marker.pose.position.z = 0.0;
-            square_marker.pose.orientation.w = 1.0;
+            // board yaw about Z
+            square_marker.pose.orientation.z = std::sin(boardYaw / 2.0);
+            square_marker.pose.orientation.w = std::cos(boardYaw / 2.0);
 
             square_marker.scale.x = square_size;
             square_marker.scale.y = square_size;
