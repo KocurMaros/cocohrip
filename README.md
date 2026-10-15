@@ -321,19 +321,22 @@ ros2 service call /resume_movement checkers_msgs/srv/ResumeMovement "{}"
 
 ### Key Debugging Tips
 
-1. **Variance Thresholds**: During calibration, set thresholds to clearly separate:
-   - Empty squares: variance < 600
-   - Black pieces: 600 < variance < 1000
-   - White pieces: variance > 1000
+1. **Piece calibration**: at startup put the pieces in the START position and
+   press SPACE in the *Piece Calibration* window. Orientation (robot's black
+   pieces on top) and the piece model are learned from it - no thresholds to
+   tune any more. ESC skips it and uses the built-in defaults.
 
-2. **Board Corners**: Select corners in order: H1 → A1 → A8 → H8
+2. **Board corners**: detected automatically (cached in
+   `~/.cocohrip/board_calibration.json`). In the grid-check window: SPACE accept,
+   `A` re-detect, `R` click manually (BL, TL, TR, BR on the inner edge of the frame).
 
-3. **Difficulty Levels**: Press keys during game:
-   - `1` = EASY (depth 1)
-   - `2` = MEDIUM (depth 3) 
-   - `3` = HARD (depth 5)
+3. **During the game** (any OpenCV window focused): `S` start, `F` start from
+   the current position, `1/2/3` easy/medium/hard, `SPACE` re-check the board
+   now, `R` robot finished (if it did not report), `H` print your legal moves.
 
-4. **Force Move Validation**: Press `SPACE` to force-validate current board state
+4. The `gameboard` window shows what the camera sees per square
+   (W / B / `?` occupied-colour-unsure / `??` unknown, red dot = changed since
+   the last confirmed position).
 
 ---
 
@@ -355,20 +358,24 @@ zMoving = 0.20;         // Safe movement height (20cm above board)
 zSafeTransition = 0.25; // Height for transitions between positions
 ```
 
-### AI Difficulty (minimax depth)
+### AI Difficulty (alpha-beta search)
 
-| Difficulty | Depth | Performance |
+| Key / trackbar level | Search depth (plies) | |
 |------------|-------|-------------|
-| EASY | 1 | Very fast, makes mistakes |
-| MEDIUM | 3 | Balanced (default) |
-| HARD | 5 | Slow but very strong |
+| `1` EASY = level 1 | 1 | instant, weak |
+| level 2 | 2 | |
+| `2` MEDIUM = level 3 | 4 | default |
+| level 4 | 6 | |
+| `3` HARD = level 5 | 8 | capped by `ai_time_limit` (4 s) |
 
-### Detection Parameters
+### Detection / game parameters
 
-In `BoardDetection`:
-```python
-STABILITY_THRESHOLD = 0.8  # Seconds to wait for stable board
-HAND_COOLDOWN = 0.5        # Seconds after hand leaves before detection
+ROS parameters of `checkers_node`:
+```
+human_first      false   # WCDF: black (robot) moves first
+ai_time_limit    4.0     # seconds per robot move
+stable_time      0.8     # board must be still this long before a move is read
+motion_threshold 1.5     # % of changed pixels that counts as motion
 ```
 
 ---
@@ -376,18 +383,67 @@ HAND_COOLDOWN = 0.5        # Seconds after hand leaves before detection
 ## System Flow
 
 ```
-1. Game starts → Player makes move → Camera detects change
-2. Board stabilizes → Move validated → Turn changes to AI
-3. AI calculates best move (minimax) → Publishes to /move_topic
-4. robot_control receives move → Plans trajectory
-5. Robot executes: 
-   a) Moves to safe approach position (20cm above board center)
-   b) Picks up piece
-   c) Places piece at target
-   d) If capture: picks up captured piece → stores in side column
-6. Robot publishes robot_move_done=true to /robot_move_topic
-7. checkers_game receives callback → Changes turn to Player
-8. Repeat from step 1
+1. S pressed with the start position -> robot (black) moves first (WCDF)
+2. Human moves a white piece and takes the hand away; when the detected
+   board has been still for stable_time the move is matched against every
+   legal move (and every huff-able one)
+3. Robot turn: if the human ignored a capture, the robot first "huffs"
+   (removes) one of the pieces that should have captured; then the AI picks
+   a legal move (captures are mandatory, multi-jumps completed)
+4. /move_topic: removed_pieces = huffed piece + captured pieces
+5. robot_control removes those pieces FIRST, then moves its own piece
+   (a huffed piece can stand on the target square)
+6. robot_move_done=true is published once, after the last pick/place
+7. checkers_game checks that the board now matches the expected position
+8. Repeat until a side has no pieces / no legal move, or a draw
+```
+
+---
+
+## Checkers game package (rules, vision, tools)
+
+### Rules - English draughts / American checkers (WCDF)
+- Men move one square diagonally forward, capture forward only.
+- Kings move/capture one square diagonally in any direction (no flying kings).
+- **Capturing is mandatory**; with several captures any one may be chosen.
+- A multi-jump must be completed; a piece cannot be jumped twice.
+- A man reaching the last row is crowned and **the move ends** there.
+- Black (robot) moves first. No pieces or no legal move = loss.
+- Draw: 40 moves each without capture or man move, or 3-fold repetition.
+- **Huff rule**: if the human plays a non-capturing move while a capture was
+  available (or stops a multi-jump early) the move stands, but the robot
+  removes one of the pieces that should have captured, then makes its move.
+  Captures the human makes: the human takes the captured robot pieces off.
+
+Code: `checkers/rules.py` (engine), `checkers/game.py` (game flow, move
+inference from the camera), `minimax/algorithm.py` (alpha-beta AI).
+
+### Vision
+- `camera/board_geometry.py` - board corners from the squares' lattice.
+- `camera/board_vision.py` - rectification into game orientation, lighting
+  invariant per-square features (reflectance relative to the square's own
+  border + a circular-rim matched filter that finds even plain black pieces
+  on black squares), piece classifier, change detection.
+- `camera/board_detection.py` - the calibration windows and runtime fusion:
+  classifier + "did this square change since the last confirmed position".
+- `camera/ximea_camera.py` - software auto-exposure on the board's white
+  squares (startup, `E` key, and automatic when the lamp is switched on/off).
+
+Measured on recordings from the cell (2 lightings x 3 exposures): 99.2-100 %
+of dark squares classified correctly *without any calibration*, no wrong
+labels (the rest is reported as "unsure" and resolved by the rules).
+
+### Tools (no ROS needed)
+```bash
+# record a dataset on the robot PC (stop the game node first)
+python3 checkers_game/tools/capture_dataset.py
+# evaluate detection on it / replay a recorded game
+python3 checkers_game/tools/eval_detection.py ~/checkers_captures/<stamp>
+python3 checkers_game/tools/replay_video.py ~/checkers_captures/<stamp>/video
+# tests (rules, game flow, vision on real frames, simulated full node run)
+cd checkers_game && python3 -m pytest test/test_rules.py test/test_game.py \
+    test/test_board_vision.py test/test_real_frames.py test/test_board_geometry.py \
+    test/test_node_sim.py -q
 ```
 
 ---

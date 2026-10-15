@@ -316,6 +316,12 @@ def generate_launch_description():
             executable='checkers_node',
             name='checkers_node',
             output='screen',
-            parameters=[{'use_sim_time': False}]
+            parameters=[{
+                'use_sim_time': False,
+                # English draughts (WCDF): black = robot moves first
+                'human_first': False,
+                'ai_time_limit': 4.0,     # s per robot move
+                'stable_time': 0.8,       # s the board must be still before a move is read
+            }]
         )
     ])

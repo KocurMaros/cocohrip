@@ -13,6 +13,8 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*launch.[pxy][yma]*')))
     ],
+    package_data={package_name: ['assets/*.png', 'camera/*.npz']},
+    include_package_data=True,
     install_requires=['setuptools', 'mediapipe'],
     zip_safe=True,
     maintainer='jozef',

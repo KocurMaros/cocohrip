@@ -430,10 +430,11 @@ void RobotControlNode::mainLoop() {
                         
                         RCLCPP_INFO(this->get_logger(), "✅ Robot reached FAKE HOME position");
                         
-                        // Publish robot move done message
-                        auto message = checkers_msgs::msg::RobotMove();
-                        message.robot_move_done = true;
-                        robotMovePub->publish(message);
+                        // NOTE: do NOT publish robot_move_done here - more
+                        // pick/place pairs (captured / huffed pieces) follow.
+                        // It is published once, after the final HOME below;
+                        // publishing it here let the game continue while the
+                        // robot was still clearing captured pieces.
                         
                         // Prepare next trajectory if available
                         if(static_cast<std::size_t>(target_pose_index) < targetPositions.size() && target_pose_index >= 0) {
@@ -768,9 +769,13 @@ void RobotControlNode::continue_move() {
                 
                 RCLCPP_INFO(this->get_logger(), "✅ Robot reached FAKE HOME position");
                 
-                auto message = checkers_msgs::msg::RobotMove();
-                message.robot_move_done = true;
-                robotMovePub->publish(message);
+                // Only report the move as done when no pick/place pairs remain
+                if (targetPositions.empty() || target_pose_index < 0 ||
+                    static_cast<std::size_t>(target_pose_index) >= targetPositions.size()) {
+                    auto message = checkers_msgs::msg::RobotMove();
+                    message.robot_move_done = true;
+                    robotMovePub->publish(message);
+                }
                 
                 // Prepare next trajectory if available
                 if(static_cast<std::size_t>(target_pose_index) < targetPositions.size() && target_pose_index >= 0) {
@@ -826,10 +831,14 @@ void RobotControlNode::ros_out_callback(const rcl_interfaces::msg::Log::SharedPt
                 
                 RCLCPP_INFO(this->get_logger(), "✅ Robot reached HOME position");
                 
-                // Publish robot move done message
-                auto message = checkers_msgs::msg::RobotMove();
-                message.robot_move_done = true;
-                robotMovePub->publish(message);
+                // Publish robot move done message - only when no pick/place
+                // pairs (captured / huffed pieces) are still pending
+                if (targetPositions.empty() || target_pose_index < 0 ||
+                    static_cast<std::size_t>(target_pose_index) >= targetPositions.size()) {
+                    auto message = checkers_msgs::msg::RobotMove();
+                    message.robot_move_done = true;
+                    robotMovePub->publish(message);
+                }
                 
                 // If there are more missions, prepare next trajectory
                 if(static_cast<std::size_t>(target_pose_index) < targetPositions.size() && target_pose_index >= 0) {
@@ -970,7 +979,6 @@ void RobotControlNode::checkers_move_callback(const checkers_msgs::msg::Move::Sh
         return;
     }
     
-    targetPositions.push_back(Mission(startRow, startCol, redColorString, Task::ATTACH));
 
     auto [targetRow, targetCol] = rotate90DegreesCounterClockwise(msg->target_row, msg->target_col);
     
@@ -980,10 +988,10 @@ void RobotControlNode::checkers_move_callback(const checkers_msgs::msg::Move::Sh
         targetPositions.clear();
         return;
     }
-    
-    targetPositions.push_back(Mission(targetRow, targetCol, redColorString, Task::DETACH));
 
-    // Process removed pieces with validation
+    // Process removed pieces FIRST (captured pieces and, after a huff, the
+    // huffed human piece - which may stand on the target square), then move
+    // the robot's own piece.
     for (const auto& piece : msg->removed_pieces) {
         auto [row, col] = rotate90DegreesCounterClockwise(piece.row, piece.col);
         
@@ -1018,6 +1026,9 @@ void RobotControlNode::checkers_move_callback(const checkers_msgs::msg::Move::Sh
         targetPositions.push_back(Mission(storage_row, storage_col, whiteColorString, Task::DETACH));
     }
     
+    targetPositions.push_back(Mission(startRow, startCol, redColorString, Task::ATTACH));
+    targetPositions.push_back(Mission(targetRow, targetCol, redColorString, Task::DETACH));
+
     // Prepare first trajectory
     if (!targetPositions.empty()) {
         target_pose_index = 0;
