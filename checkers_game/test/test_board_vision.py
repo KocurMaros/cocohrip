@@ -154,12 +154,18 @@ def test_change_scores_ignore_global_lighting():
     assert z.max() < 3.0
 
 
-@pytest.mark.parametrize("rotate_k", [0, 1, 2, 3])
-def test_piece_offset_measures_pushed_piece(rotate_k):
+# board corners in the real camera image: the far edge is ~28 % shorter
+REAL_CORNERS = np.array([[119, 541], [50, 84], [497, 41], [507, 536]], np.float32)
+
+
+@pytest.mark.parametrize("rotate_k, corners", [(0, None), (1, None), (2, None), (3, None),
+                                               (0, REAL_CORNERS)])
+def test_piece_offset_measures_pushed_piece(rotate_k, corners):
     """A pushed piece is measured to a few px (1 px ~ 0.6 mm) despite parallax."""
     rng = np.random.RandomState(rotate_k)
     start = GameState.initial(1).to_grid()
-    corners = sb.random_corners(rng)
+    if corners is None:
+        corners = sb.random_corners(rng)
     parallax = {(r, c): (c - 4, round(1.5 * r) - 12) for r in range(8) for c in range(8)}
 
     def shot(centres):
