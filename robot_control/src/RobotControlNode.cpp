@@ -1,5 +1,8 @@
 #include "robot_control/RobotControlNode.hpp"
 #include "robot_control/RobotPoseUtility.hpp"
+#include <cmath>
+#include <cstdlib>
+#include <filesystem>
 
 using namespace std::chrono_literals;
 
@@ -49,38 +52,54 @@ RobotControlNode::RobotControlNode()
 
     std::this_thread::sleep_for(std::chrono::seconds(1));
 
-    // Real-world measured board corners (center of corner squares)
-    // Closest to robot (bottom-right corner at position 7,7)
-    //float corner_near_x = 0.8736;
-    //float corner_near_y = 0.4882+0.01;
-    
-    // Farthest from robot (top-left corner at position 0,0)
-    //float corner_far_x = 0.4711;
-    //float corner_far_y = 0.0866+0.01;
-    
-    float corner_near_x = 0.8736+0.02+(0.0005*2);
-    float corner_near_y = 0.4882+0.01-0.015;
-    
-    // Farthest from robot (top-left corner)
-    float corner_far_x = 0.4711+0.02+(0.0005*2);
-    float corner_far_y = 0.0866+0.01-0.015;
+    // Real-world measured board corners: centre of the dark corner squares,
+    // TCP positions read with the gripper over the piece. These were read on
+    // the flange (ur5e_tool0) before the gripper was in the model; x, y carry
+    // over unchanged to ur5e_robotiq_hande_end (straight below the flange with
+    // the tool pointing down), only z differs by kHandeFlangeToTcp.
+    //   board_h8_xy: H8 = game (0,7), black piece, closest to the robot
+    //   board_a1_xy: A1 = game (7,0), white piece, farthest from the robot
+    // 2026-10-15 (board moved): H8 [1.1099, 0.4478, 0.1643], A1 [0.7191, 0.0458, 0.1607]
+    // (previous placement: H8 [0.8946, 0.4832], A1 [0.4921, 0.0816])
+    auto h8 = this->declare_parameter<std::vector<double>>("board_h8_xy", {1.1099, 0.4478});
+    auto a1 = this->declare_parameter<std::vector<double>>("board_a1_xy", {0.7191, 0.0458});
+    storageFirstCol = this->declare_parameter<double>("storage_first_col", -1.8);
+    storageColStep = this->declare_parameter<double>("storage_col_step", -1.1);
+    storageRows = static_cast<int>(this->declare_parameter<int64_t>("storage_rows", 6));
+    if (h8.size() < 2 || a1.size() < 2 || storageRows < 1) {
+        RCLCPP_ERROR(this->get_logger(), "board_h8_xy / board_a1_xy need 2 values, storage_rows >= 1 - using defaults");
+        h8 = {1.1099, 0.4478};
+        a1 = {0.7191, 0.0458};
+        storageRows = 6;
+    }
+    computeBoardGeometry(h8[0], h8[1], a1[0], a1[1]);
 
-    // Calculate square size from measured corners
-    square_size = (corner_near_x - corner_far_x) / 7.0;  // Distance across 7 squares
-    
-    // Calculate board offsets (position of square 0,0 center)
-    boardOffsetX = corner_far_x;
-    boardOffsetY = corner_far_y;
-    
-    // Z heights
-    zAttach = 0.155;  // End effector offset - minimum safe height
-    zMoving = 0.20;   // Safe moving height above board (raised to 20cm to avoid hitting pieces)
-    zSafeTransition = 0.25;  // Safe transition height for movements between squares (25cm)
+    // Z heights, expressed in the TCP (gripper fingertip) frame now that the
+    // gripper is part of the kinematic chain (see robotiq_hande_description's
+    // robotiq_hande_gripper.xacro) and pose_utility_ targets "ur5e_robotiq_hande_end"
+    // instead of the bare flange. Each value is the OLD flange-frame height
+    // (tuned while the gripper was invisible to the planner) minus
+    // kHandeFlangeToTcp, so the flange travels exactly as high as before.
+    // Grasp: the old target was (z_attach 0.155 - 0.0107) = 0.1443 m, but
+    // RobotPoseUtility clamped every target to a 0.16 m minimum flange height,
+    // so the robot really grasped with the flange at 0.160 m (matches the
+    // 0.1607 / 0.1643 measured at A1 / H8) -> 0.160 - 0.1565 = 0.0035 m TCP.
+    // That clamp is gone now that the gripper itself is collision-checked.
+    // Tune on the robot by touching a piece and reading
+    // `ros2 run tf2_ros tf2_echo world ur5e_robotiq_hande_end`.
+    zAttach = this->declare_parameter<double>("z_attach", 0.160 - kHandeFlangeToTcp);
+    zMoving = 0.20 - kHandeFlangeToTcp;           // was: raised to 20cm to avoid hitting pieces
+    zSafeTransition = 0.25 - kHandeFlangeToTcp;   // was: safe transition height between squares
     
     RCLCPP_INFO(this->get_logger(), "Board calibration:");
     RCLCPP_INFO(this->get_logger(), "  Calculated square size: %.4f m", square_size);
     RCLCPP_INFO(this->get_logger(), "  Board offset X: %.4f m", boardOffsetX);
     RCLCPP_INFO(this->get_logger(), "  Board offset Y: %.4f m", boardOffsetY);
+    RCLCPP_INFO(this->get_logger(), "  Board yaw: %.2f deg, A1 (%.4f, %.4f)", boardYaw * 180.0 / M_PI, a1X, a1Y);
+    for (int k : {0, storageRows - 1, 2 * storageRows - 1}) {
+        auto [sx, sy] = missionToXY(STORAGE_ROW_BASE + k, 0);
+        RCLCPP_INFO(this->get_logger(), "  Storage slot %d: (%.4f, %.4f)", k, sx, sy);
+    }
     RCLCPP_INFO(this->get_logger(), "  Z attach height: %.4f m", zAttach);
     RCLCPP_INFO(this->get_logger(), "  Z moving height: %.4f m", zMoving);
 }
@@ -95,7 +114,7 @@ void RobotControlNode::initMoveGroup() {
     pose_utility_ = std::make_shared<RobotPoseUtility>(
         shared_from_this(),
         "ur5e_arm",
-        "ur5e_tool0"
+        "ur5e_robotiq_hande_end"
     );
 
     if (!pose_utility_->initialize()) {
@@ -137,9 +156,10 @@ bool RobotControlNode::moveToSafeApproachPosition() {
     RCLCPP_INFO(this->get_logger(), "Moving to safe approach position 20cm above chessboard center...");
     
     // Calculate center of chessboard
-    float center_x = boardOffsetX + (3.5 * square_size);  // Middle of 8x8 board
-    float center_y = boardOffsetY + (3.5 * square_size);
-    float approach_z = 0.30;  // 20cm above board surface (board at ~0.10m)
+    float center_x = static_cast<float>(a1X + (3.5 - 7.0) * urX + 3.5 * ucX);  // Middle of 8x8 board
+    float center_y = static_cast<float>(a1Y + (3.5 - 7.0) * urY + 3.5 * ucY);
+    // TCP-frame height: flange at 0.30 m as before the gripper was in the model
+    float approach_z = static_cast<float>(0.30 - kHandeFlangeToTcp);
     
     geometry_msgs::msg::Pose approach_pose;
     approach_pose.orientation.x = -0.0028119066264480352;
@@ -217,11 +237,12 @@ void RobotControlNode::mainLoop() {
         
         if (current_pose_opt) {
             // Get target position of first mission
-            float target_x = boardOffsetX + (3.5 * square_size);
-            float target_y = boardOffsetY + (3.5 * square_size);
+            float target_x = static_cast<float>(a1X + (3.5 - 7.0) * urX + 3.5 * ucX);
+            float target_y = static_cast<float>(a1Y + (3.5 - 7.0) * urY + 3.5 * ucY);
             if (!targetPositions.empty()) {
-                target_x = (targetPositions[0].row * square_size) + boardOffsetX;
-                target_y = (targetPositions[0].col * square_size) + boardOffsetY;
+                auto [tx, ty] = missionToXY(targetPositions[0].row, targetPositions[0].col);
+                target_x = static_cast<float>(tx);
+                target_y = static_cast<float>(ty);
             }
             
             double distance_to_target = std::sqrt(
@@ -430,10 +451,11 @@ void RobotControlNode::mainLoop() {
                         
                         RCLCPP_INFO(this->get_logger(), "✅ Robot reached FAKE HOME position");
                         
-                        // Publish robot move done message
-                        auto message = checkers_msgs::msg::RobotMove();
-                        message.robot_move_done = true;
-                        robotMovePub->publish(message);
+                        // NOTE: do NOT publish robot_move_done here - more
+                        // pick/place pairs (captured / huffed pieces) follow.
+                        // It is published once, after the final HOME below;
+                        // publishing it here let the game continue while the
+                        // robot was still clearing captured pieces.
                         
                         // Prepare next trajectory if available
                         if(static_cast<std::size_t>(target_pose_index) < targetPositions.size() && target_pose_index >= 0) {
@@ -768,9 +790,13 @@ void RobotControlNode::continue_move() {
                 
                 RCLCPP_INFO(this->get_logger(), "✅ Robot reached FAKE HOME position");
                 
-                auto message = checkers_msgs::msg::RobotMove();
-                message.robot_move_done = true;
-                robotMovePub->publish(message);
+                // Only report the move as done when no pick/place pairs remain
+                if (targetPositions.empty() || target_pose_index < 0 ||
+                    static_cast<std::size_t>(target_pose_index) >= targetPositions.size()) {
+                    auto message = checkers_msgs::msg::RobotMove();
+                    message.robot_move_done = true;
+                    robotMovePub->publish(message);
+                }
                 
                 // Prepare next trajectory if available
                 if(static_cast<std::size_t>(target_pose_index) < targetPositions.size() && target_pose_index >= 0) {
@@ -826,10 +852,17 @@ void RobotControlNode::ros_out_callback(const rcl_interfaces::msg::Log::SharedPt
                 
                 RCLCPP_INFO(this->get_logger(), "✅ Robot reached HOME position");
                 
-                // Publish robot move done message
-                auto message = checkers_msgs::msg::RobotMove();
-                message.robot_move_done = true;
-                robotMovePub->publish(message);
+                // Publish robot move done message - only when no pick/place
+                // pairs (captured / huffed pieces) are still pending, and not
+                // for the first leg of the final HOME (its thread publishes
+                // once moveToNamedTarget("home") is done)
+                if (!isFinalHome.load() &&
+                    (targetPositions.empty() || target_pose_index < 0 ||
+                     static_cast<std::size_t>(target_pose_index) >= targetPositions.size())) {
+                    auto message = checkers_msgs::msg::RobotMove();
+                    message.robot_move_done = true;
+                    robotMovePub->publish(message);
+                }
                 
                 // If there are more missions, prepare next trajectory
                 if(static_cast<std::size_t>(target_pose_index) < targetPositions.size() && target_pose_index >= 0) {
@@ -875,7 +908,14 @@ double RobotControlNode::calculate_palm_LM_distance_to_tool0(const geometry_msgs
 
     if(isRobotMoving.load() && !isStop.load()) {
         std::ofstream outfile;
-        outfile.open("/home/collab/amavet_ws/src/robot_control/src/" + currentFileName, std::ios_base::app);
+        static const std::filesystem::path dataDir = [] {
+            const char* home = std::getenv("HOME");
+            std::filesystem::path dir = std::filesystem::path(home ? home : "/tmp") / "robot_data";
+            std::error_code ec;
+            std::filesystem::create_directories(dir, ec);
+            return dir;
+        }();
+        outfile.open(dataDir / currentFileName, std::ios_base::app);
         if (outfile.is_open()) {
             outfile << currentPosition.position.x << ","
                     << currentPosition.position.y << ","
@@ -970,7 +1010,6 @@ void RobotControlNode::checkers_move_callback(const checkers_msgs::msg::Move::Sh
         return;
     }
     
-    targetPositions.push_back(Mission(startRow, startCol, redColorString, Task::ATTACH));
 
     auto [targetRow, targetCol] = rotate90DegreesCounterClockwise(msg->target_row, msg->target_col);
     
@@ -980,44 +1019,37 @@ void RobotControlNode::checkers_move_callback(const checkers_msgs::msg::Move::Sh
         targetPositions.clear();
         return;
     }
-    
-    targetPositions.push_back(Mission(targetRow, targetCol, redColorString, Task::DETACH));
 
-    // Process removed pieces with validation
+    // Process removed pieces FIRST (captured pieces and, after a huff, the
+    // huffed human piece - which may stand on the target square), then move
+    // the robot's own piece.
     for (const auto& piece : msg->removed_pieces) {
         auto [row, col] = rotate90DegreesCounterClockwise(piece.row, piece.col);
         
-        // FIXED: Storage area layout - pieces stored in rows next to the board
-        // Row 8 = first storage row (off board), columns 0-3 for first 4 pieces
-        // Row 9 = second storage row, columns 0-3 for next 4 pieces
-        // This creates a 3x4 grid of storage positions next to the board
-        int storage_row_offset = removedPiecesCount / 4;  // Which row (0, 1, 2)
-        int storage_col_offset = removedPiecesCount % 4;  // Which column within row (0-3)
-        
-        // Storage position: row 8+ (off board), columns spread out
-        int storage_row = 8 + storage_row_offset;  // Rows 8, 9, 10 (off board side)
-        int storage_col = storage_col_offset;       // Columns 0, 1, 2, 3
-        
-        // Add bounds checking for storage positions (max 3 rows of 4 pieces = 12 pieces)
-        if (storage_row_offset > 2) {
+        // Storage beside the a-file edge (see missionToXY / storage_* params):
+        // slot k -> mission row STORAGE_ROW_BASE + k.  2 columns of storageRows.
+        const int slot = removedPiecesCount;
+        if (slot >= 2 * storageRows) {
             RCLCPP_ERROR(this->get_logger(), "Storage area full! Cannot store more pieces.");
             continue;
         }
-        
-        RCLCPP_INFO(this->get_logger(), 
-                   "Storage calculation: piece #%d -> storage[row=%d, col=%d]", 
-                   removedPiecesCount, storage_row, storage_col);
+        const int storage_row = STORAGE_ROW_BASE + slot;
+        const int storage_col = 0;
+        auto [storeX, storeY] = missionToXY(storage_row, storage_col);
         
         removedPiecesCount++;
         
         RCLCPP_INFO(this->get_logger(), 
-                   "Storing removed piece from board[%d, %d] to storage[%d, %d]", 
-                   row, col, storage_row, storage_col);
+                   "Storing removed piece from board[%d, %d] to storage slot %d (%.4f, %.4f)", 
+                   row, col, slot, storeX, storeY);
 
         targetPositions.push_back(Mission(row, col, whiteColorString, Task::ATTACH));
         targetPositions.push_back(Mission(storage_row, storage_col, whiteColorString, Task::DETACH));
     }
     
+    targetPositions.push_back(Mission(startRow, startCol, redColorString, Task::ATTACH));
+    targetPositions.push_back(Mission(targetRow, targetCol, redColorString, Task::DETACH));
+
     // Prepare first trajectory
     if (!targetPositions.empty()) {
         target_pose_index = 0;
@@ -1026,30 +1058,66 @@ void RobotControlNode::checkers_move_callback(const checkers_msgs::msg::Move::Sh
         RCLCPP_INFO(this->get_logger(), "Prepared trajectory with %zu poses", trajectory_list.size());
     }
 }
+void RobotControlNode::computeBoardGeometry(double h8x, double h8y, double a1x, double a1y) {
+    // H8 = game (0,7), A1 = game (7,0):  H8 - A1 = 7 * (u_c - u_r).
+    // Square board, not mirrored: u_c = u_r rotated by +90 deg, i.e.
+    // u_c = (-u_r.y, u_r.x).  Solving d = u_c - u_r for u_r gives:
+    const double dx = (h8x - a1x) / 7.0;
+    const double dy = (h8y - a1y) / 7.0;
+    urX = 0.5 * (dy - dx);
+    urY = -0.5 * (dx + dy);
+    ucX = -urY;
+    ucY = urX;
+    a1X = a1x;
+    a1Y = a1y;
+    square_size = static_cast<float>(std::sqrt(urX * urX + urY * urY));
+    boardYaw = std::atan2(ucY, ucX);
+    auto [ox, oy] = missionToXY(0, 0);
+    boardOffsetX = static_cast<float>(ox);
+    boardOffsetY = static_cast<float>(oy);
+}
+
+std::pair<double, double> RobotControlNode::missionToXY(int row, int col) const {
+    double gameRow, gameCol;
+    if (row >= STORAGE_ROW_BASE) {
+        // storage slot beside the a-file edge (outside the board)
+        const int k = row - STORAGE_ROW_BASE;
+        gameRow = static_cast<double>(k % storageRows);
+        gameCol = storageFirstCol + static_cast<double>(k / storageRows) * storageColStep;
+    } else {
+        // mission (row, col) = rotate90DegreesCounterClockwise(r, c) = (c, 7 - r)
+        gameRow = 7.0 - col;
+        gameCol = row;
+    }
+    return {a1X + (gameRow - 7.0) * urX + gameCol * ucX,
+            a1Y + (gameRow - 7.0) * urY + gameCol * ucY};
+}
+
 std::vector<std::pair<geometry_msgs::msg::Pose, Task>> RobotControlNode::getPoseList(Mission mission) {
     trajectory_pose_index = 0;
     std::vector<std::pair<geometry_msgs::msg::Pose, Task>> poses;
 
-    float posX = (mission.row * square_size) + boardOffsetX;
-    float posY = (mission.col * square_size) + boardOffsetY;
+    auto [targetX, targetY] = missionToXY(mission.row, mission.col);
+    float posX = static_cast<float>(targetX);
+    float posY = static_cast<float>(targetY);
     
-    // SAFETY CHECK: Validate coordinates are within reasonable bounds
-    float min_x = boardOffsetX - square_size;  // Allow 1 square beyond board
-    float max_x = boardOffsetX + (9 * square_size);  // Board + 1 extra square
-    float min_y = boardOffsetY - square_size;
-    float max_y = boardOffsetY + (9 * square_size);
-    
-    if (posX < min_x || posX > max_x || posY < min_y || posY > max_y) {
+    // SAFETY CHECK: the target must lie on the board or the storage area
+    // next to it: within 8 squares of the board centre (board corner squares
+    // are ~5 squares away, storage slots ~7.3)
+    const double centerX = a1X + (3.5 - 7.0) * urX + 3.5 * ucX;
+    const double centerY = a1Y + (3.5 - 7.0) * urY + 3.5 * ucY;
+    const double maxDist = 8.0 * square_size;
+    const double distFromCenter = std::hypot(posX - centerX, posY - centerY);
+    if (distFromCenter > maxDist) {
         RCLCPP_ERROR(this->get_logger(), 
-                    "Target position OUT OF BOUNDS! Row=%d, Col=%d -> X=%.4f, Y=%.4f",
-                    mission.row, mission.col, posX, posY);
-        RCLCPP_ERROR(this->get_logger(), 
-                    "Valid range: X[%.4f to %.4f], Y[%.4f to %.4f]",
-                    min_x, max_x, min_y, max_y);
+                    "Target position OUT OF BOUNDS! Row=%d, Col=%d -> X=%.4f, Y=%.4f "
+                    "(%.3f m from board centre, limit %.3f m)",
+                    mission.row, mission.col, posX, posY, distFromCenter, maxDist);
         
-        // Clamp to valid range
-        posX = std::max(min_x, std::min(max_x, posX));
-        posY = std::max(min_y, std::min(max_y, posY));
+        // Clamp onto the allowed circle
+        const double k = maxDist / distFromCenter;
+        posX = static_cast<float>(centerX + (posX - centerX) * k);
+        posY = static_cast<float>(centerY + (posY - centerY) * k);
         
         RCLCPP_WARN(this->get_logger(), "Clamped to: X=%.4f, Y=%.4f", posX, posY);
     }
@@ -1105,12 +1173,10 @@ std::vector<std::pair<geometry_msgs::msg::Pose, Task>> RobotControlNode::getPose
     // OPTIMIZED: Skip intermediate zMoving pose - go directly from approach to attach
     // Only add zMoving waypoint if we didn't add an approach waypoint (i.e., we're already above target)
     if (!added_approach_waypoint) {
-        // If we are already above target (small horizontal move), still go to safe height (5cm above board = 0.15m)
+        // If we are already above target (small horizontal move), still go to safe height.
         // User requested: "go after taking piece 5 cm above checker board"
-        // Board is at ~0.10m, so 5cm above board is ~0.15m absolute Z
-        // Assuming user means 5cm clearance above pieces which are ~0.15m
-        
-        float zClearance = 0.20; // 20cm absolute height (clearance above pieces)
+        // Same flange-height-to-TCP-height conversion as zAttach/zMoving/zSafeTransition above.
+        float zClearance = 0.20 - kHandeFlangeToTcp; // was: 20cm absolute height (clearance above pieces)
         
         geometry_msgs::msg::Pose above_pose;
         above_pose.orientation.x = -0.0028119066264480352;
@@ -1133,7 +1199,7 @@ std::vector<std::pair<geometry_msgs::msg::Pose, Task>> RobotControlNode::getPose
     pose2.orientation.w = -0.00023792324645910412;
     pose2.position.x = posX;
     pose2.position.y = posY;
-    pose2.position.z = zAttach - 0.0107;
+    pose2.position.z = zAttach;
     // Gripper task happens HERE at the lowest point, after reaching position
     poses.push_back(std::make_pair(pose2, mission.task));
 
@@ -1162,6 +1228,19 @@ std::vector<std::pair<geometry_msgs::msg::Pose, Task>> RobotControlNode::getPose
 
 void RobotControlNode::checkers_board_callback(const checkers_msgs::msg::Board::SharedPtr msg) {
     removeAllFakePieces();
+
+    // All 12 white pieces on the board -> none is in the storage area (new
+    // game): start filling the storage slots from the first one again.
+    int whitePieces = 0;
+    for (const auto& piece : msg->pieces) {
+        if (piece.color == whiteColorString) {
+            whitePieces++;
+        }
+    }
+    if (whitePieces == 12 && removedPiecesCount != 0) {
+        RCLCPP_INFO(this->get_logger(), "New game detected - storage area reset");
+        removedPiecesCount = 0;
+    }
 
     for (const auto& piece : msg->pieces) {
         auto [row, col] = rotate90DegreesCounterClockwise(piece.row, piece.col);
@@ -1200,8 +1279,9 @@ void RobotControlNode::createFakePieceWithColor(const std::string& object_id, in
     fakePiece.type = visualization_msgs::msg::Marker::CYLINDER;
     fakePiece.action = visualization_msgs::msg::Marker::ADD;
 
-    fakePiece.pose.position.x = (row * square_size) + boardOffsetX;
-    fakePiece.pose.position.y = (col * square_size) + boardOffsetY;
+    auto [fakeX, fakeY] = missionToXY(row, col);
+    fakePiece.pose.position.x = fakeX;
+    fakePiece.pose.position.y = fakeY;
     fakePiece.pose.position.z = 0.0075;
     fakePiece.pose.orientation.w = 1.0;
 
@@ -1270,8 +1350,9 @@ void RobotControlNode::createPiece(int row, int col) {
     primitive.dimensions[primitive.CYLINDER_HEIGHT] = 0.005;
     primitive.dimensions[primitive.CYLINDER_RADIUS] = 0.014;
 
-    float posX = (row * square_size) + boardOffsetX;
-    float posY = (col * square_size) + boardOffsetY;
+    auto [pieceX, pieceY] = missionToXY(row, col);
+    float posX = static_cast<float>(pieceX);
+    float posY = static_cast<float>(pieceY);
 
     geometry_msgs::msg::Pose cylinder_pose;
     cylinder_pose.orientation.w = 1.0;
@@ -1318,10 +1399,13 @@ void RobotControlNode::publishCheckerboard() {
             square_marker.type = visualization_msgs::msg::Marker::CUBE;
             square_marker.action = visualization_msgs::msg::Marker::ADD;
 
-            square_marker.pose.position.x = (rotatedRow * square_size) + boardOffsetX;
-            square_marker.pose.position.y = (rotatedCol * square_size) + boardOffsetY;
+            auto [squareX, squareY] = missionToXY(rotatedRow, rotatedCol);
+            square_marker.pose.position.x = squareX;
+            square_marker.pose.position.y = squareY;
             square_marker.pose.position.z = 0.0;
-            square_marker.pose.orientation.w = 1.0;
+            // board yaw about Z
+            square_marker.pose.orientation.z = std::sin(boardYaw / 2.0);
+            square_marker.pose.orientation.w = std::cos(boardYaw / 2.0);
 
             square_marker.scale.x = square_size;
             square_marker.scale.y = square_size;

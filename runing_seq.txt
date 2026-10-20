@@ -1,11 +1,13 @@
-//new 
-source ~/amavet_ws/install/setup.bash && ros2 launch cocohrip_control bringup_all.launch.py
-source ~/amavet_ws/install/setup.bash && ros2 launch robot_control new_launch.py
+// build: in a NEW terminal (only ROS Jazzy sourced, never another workspace)
+cd ~/checkers_ws && colcon build
+// run: each command in its own NEW terminal (or ./clean_shell.sh for a guaranteed clean one)
+source ~/checkers_ws/install/setup.bash && ros2 launch cocohrip_control bringup_all.launch.py
+source ~/checkers_ws/install/setup.bash && ros2 launch robot_control new_launch.py
 //optional
-source ~/amavet_ws/install/setup.bash && ros2 run leap_gesture_interface leap_example_node
+source ~/checkers_ws/install/setup.bash && ros2 run leap_gesture_interface leap_hand_publisher_node
 // if needed only after rebooting computer
 sudo tee /sys/module/usbcore/parameters/usbfs_memory_mb >/dev/null <<<0
-cd ~/amavet_ws && source install/setup.bash && ros2 launch checkers_game checkers_game_launch.launch.py
+cd ~/checkers_ws && source install/setup.bash && ros2 launch checkers_game checkers_game_launch.launch.py
 
 start corner H1 continue A1 A8 and H8
 set thresholds empty fields significantly lower than black piece and 

@@ -67,6 +67,20 @@ public:
                                          const geometry_msgs::msg::Pose& target_position);
 
 private:
+    // Robotiq Hand-E flange-to-TCP distance (m): tool0 -> IO coupler (0.011) ->
+    // Hand-E body (0.099) -> fingertip contact plane (0.0465), per the vendored
+    // real geometry in robotiq_hande_description/urdf/robotiq_hande_gripper.xacro
+    // (the "${prefix}hande_end" frame). This is close to (but more precise than)
+    // the ~0.155 m empirically-tuned flange offset this constant replaces; it
+    // still hasn't been independently re-verified against the real cell's exact
+    // coupler/fingertip hardware. This used to be baked separately into
+    // zAttach/zMoving/zSafeTransition below (as flange heights, since planning
+    // targeted the bare "ur5e_tool0" flange) because the gripper wasn't part of
+    // the kinematic chain. Now that pose_utility_ targets "ur5e_robotiq_hande_end"
+    // directly, it is only needed here to translate the old empirically-tuned
+    // flange heights into real TCP-frame heights.
+    static constexpr double kHandeFlangeToTcp = 0.011 + 0.099 + 0.0465;
+
     // RobotPoseUtility instead of MoveGroupInterface
     std::shared_ptr<RobotPoseUtility> pose_utility_;
 
@@ -111,14 +125,31 @@ private:
     bool startProgram = true;
     std::unordered_map<int, bool> piecesInRviz;
 
-    // Board calibration - measured real-world coordinates
-    // Corner positions (center of corner squares):
-    //   Bottom-right (7,7): X=0.8736, Y=0.4882 (closest to robot)
-    //   Top-left (0,0):     X=0.4711, Y=0.0866 (farthest from robot)
+    // Board calibration - measured real-world coordinates (ROS parameters
+    // board_h8_xy / board_a1_xy, see the constructor):
+    //   H8 = game square (0,7): black piece, dark corner square closest to the robot
+    //   A1 = game square (7,0): white piece, dark corner square farthest from the robot
+    // Centre of game square (r, c) = A1 + (r - 7) * u_r + c * u_c, with
+    // |u_r| = |u_c| = square_size, u_c = u_r rotated +90 deg (any board yaw).
     float square_size;      // Calculated from corner measurements
-    float boardOffsetX;     // X position of square (0,0) center
-    float boardOffsetY;     // Y position of square (0,0) center
-    float zAttach;          // Height for attaching pieces (min safe Z = 0.155m)
+    float boardOffsetX;     // (kept for logging) X of mission square (0,0)
+    float boardOffsetY;     // (kept for logging) Y of mission square (0,0)
+    double a1X = 0.0, a1Y = 0.0;
+    double urX = 0.0, urY = 0.0;   // game row direction (one square)
+    double ucX = 0.0, ucY = 0.0;   // game column direction (one square)
+    double boardYaw = 0.0;         // rotation of the board's column axis vs. +X
+    // Storage for removed (captured / huffed) pieces: beside the a-file edge,
+    // slot k at game row (k % storageRows), game column
+    // storageFirstCol + (k / storageRows) * storageColStep.
+    double storageFirstCol = -1.8;
+    double storageColStep = -1.1;
+    int storageRows = 6;
+    static constexpr int STORAGE_ROW_BASE = 100;   // Mission.row >= this = storage slot
+    // Robot-frame (X, Y) of a mission square (row/col after
+    // rotate90DegreesCounterClockwise) or of a storage slot.
+    std::pair<double, double> missionToXY(int row, int col) const;
+    void computeBoardGeometry(double h8x, double h8y, double a1x, double a1y);
+    float zAttach;          // TCP (fingertip) height when grasping; ROS parameter "z_attach"
     float zMoving;          // Safe height for moving above board
     float zMoveOffset;      // Movement offset after placing / grasping a checker
     float zSafeTransition;  // Safe transition height for movements between squares

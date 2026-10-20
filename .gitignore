@@ -1,0 +1,4 @@
+# camera datasets (tools/capture_dataset.py)
+checkers_captures*/
+checkers_captures*.tgz
+__pycache__/
