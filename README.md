@@ -281,8 +281,14 @@ centre of the dark corner squares, same frame the robot moves in), set in
 ```
 board_h8_xy: [1.1099, 0.4478]   # H8: black piece, corner closest to the robot
 board_a1_xy: [0.7191, 0.0458]   # A1: white piece, corner farthest from the robot
-z_attach:    0.155              # grasp height
+z_attach:    0.0035             # fingertip (ur5e_robotiq_hande_end) height when grasping;
+                                # launch arg: ros2 launch robot_control new_launch.py z_attach:=0.005
 ```
+The Hand-E gripper is part of the robot model, so MoveIt plans for the
+gripper fingertip frame `ur5e_robotiq_hande_end` and collision-checks the
+gripper. Its x, y equal the flange's (`ur5e_tool0`); z is
+`kHandeFlangeToTcp` = 0.1565 m lower. Read new measurements with
+`ros2 run tf2_ros tf2_echo world ur5e_robotiq_hande_end`.
 After moving the board, re-measure these two points; a rotated board is
 handled (the square size and yaw come from the two points). Also re-check the
 camera corners at startup (press `A` in the grid-check window).
@@ -358,10 +364,12 @@ pose_utility_->setAccelerationScaling(0.3); // 30% max acceleration
 
 ### Movement Heights
 
+Heights are for the gripper fingertip frame `ur5e_robotiq_hande_end`
+(flange height minus `kHandeFlangeToTcp` = 0.1565 m):
 ```cpp
-zAttach = 0.155;        // Height for gripping pieces
-zMoving = 0.20;         // Safe movement height (20cm above board)
-zSafeTransition = 0.25; // Height for transitions between positions
+zAttach = 0.160 - kHandeFlangeToTcp;         // 0.0035, ROS param z_attach (grasp)
+zMoving = 0.20 - kHandeFlangeToTcp;          // flange at 20 cm
+zSafeTransition = 0.25 - kHandeFlangeToTcp;  // flange at 25 cm, travel between squares
 ```
 
 ### AI Difficulty (alpha-beta search)

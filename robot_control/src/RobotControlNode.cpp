@@ -51,7 +51,10 @@ RobotControlNode::RobotControlNode()
     std::this_thread::sleep_for(std::chrono::seconds(1));
 
     // Real-world measured board corners: centre of the dark corner squares,
-    // TCP positions read with the gripper over the piece.
+    // TCP positions read with the gripper over the piece. These were read on
+    // the flange (ur5e_tool0) before the gripper was in the model; x, y carry
+    // over unchanged to ur5e_robotiq_hande_end (straight below the flange with
+    // the tool pointing down), only z differs by kHandeFlangeToTcp.
     //   board_h8_xy: H8 = game (0,7), black piece, closest to the robot
     //   board_a1_xy: A1 = game (7,0), white piece, farthest from the robot
     // 2026-10-15 (board moved): H8 [1.1099, 0.4478, 0.1643], A1 [0.7191, 0.0458, 0.1607]
@@ -69,10 +72,22 @@ RobotControlNode::RobotControlNode()
     }
     computeBoardGeometry(h8[0], h8[1], a1[0], a1[1]);
 
-    // Z heights
-    zAttach = this->declare_parameter<double>("z_attach", 0.155);  // grasp height (min safe Z = 0.155m)
-    zMoving = 0.20;   // Safe moving height above board (raised to 20cm to avoid hitting pieces)
-    zSafeTransition = 0.25;  // Safe transition height for movements between squares (25cm)
+    // Z heights, expressed in the TCP (gripper fingertip) frame now that the
+    // gripper is part of the kinematic chain (see robotiq_hande_description's
+    // robotiq_hande_gripper.xacro) and pose_utility_ targets "ur5e_robotiq_hande_end"
+    // instead of the bare flange. Each value is the OLD flange-frame height
+    // (tuned while the gripper was invisible to the planner) minus
+    // kHandeFlangeToTcp, so the flange travels exactly as high as before.
+    // Grasp: the old target was (z_attach 0.155 - 0.0107) = 0.1443 m, but
+    // RobotPoseUtility clamped every target to a 0.16 m minimum flange height,
+    // so the robot really grasped with the flange at 0.160 m (matches the
+    // 0.1607 / 0.1643 measured at A1 / H8) -> 0.160 - 0.1565 = 0.0035 m TCP.
+    // That clamp is gone now that the gripper itself is collision-checked.
+    // Tune on the robot by touching a piece and reading
+    // `ros2 run tf2_ros tf2_echo world ur5e_robotiq_hande_end`.
+    zAttach = this->declare_parameter<double>("z_attach", 0.160 - kHandeFlangeToTcp);
+    zMoving = 0.20 - kHandeFlangeToTcp;           // was: raised to 20cm to avoid hitting pieces
+    zSafeTransition = 0.25 - kHandeFlangeToTcp;   // was: safe transition height between squares
     
     RCLCPP_INFO(this->get_logger(), "Board calibration:");
     RCLCPP_INFO(this->get_logger(), "  Calculated square size: %.4f m", square_size);
@@ -97,7 +112,7 @@ void RobotControlNode::initMoveGroup() {
     pose_utility_ = std::make_shared<RobotPoseUtility>(
         shared_from_this(),
         "ur5e_arm",
-        "ur5e_tool0"
+        "ur5e_robotiq_hande_end"
     );
 
     if (!pose_utility_->initialize()) {
@@ -141,7 +156,8 @@ bool RobotControlNode::moveToSafeApproachPosition() {
     // Calculate center of chessboard
     float center_x = static_cast<float>(a1X + (3.5 - 7.0) * urX + 3.5 * ucX);  // Middle of 8x8 board
     float center_y = static_cast<float>(a1Y + (3.5 - 7.0) * urY + 3.5 * ucY);
-    float approach_z = 0.30;  // 20cm above board surface (board at ~0.10m)
+    // TCP-frame height: flange at 0.30 m as before the gripper was in the model
+    float approach_z = static_cast<float>(0.30 - kHandeFlangeToTcp);
     
     geometry_msgs::msg::Pose approach_pose;
     approach_pose.orientation.x = -0.0028119066264480352;
@@ -1148,12 +1164,10 @@ std::vector<std::pair<geometry_msgs::msg::Pose, Task>> RobotControlNode::getPose
     // OPTIMIZED: Skip intermediate zMoving pose - go directly from approach to attach
     // Only add zMoving waypoint if we didn't add an approach waypoint (i.e., we're already above target)
     if (!added_approach_waypoint) {
-        // If we are already above target (small horizontal move), still go to safe height (5cm above board = 0.15m)
+        // If we are already above target (small horizontal move), still go to safe height.
         // User requested: "go after taking piece 5 cm above checker board"
-        // Board is at ~0.10m, so 5cm above board is ~0.15m absolute Z
-        // Assuming user means 5cm clearance above pieces which are ~0.15m
-        
-        float zClearance = 0.20; // 20cm absolute height (clearance above pieces)
+        // Same flange-height-to-TCP-height conversion as zAttach/zMoving/zSafeTransition above.
+        float zClearance = 0.20 - kHandeFlangeToTcp; // was: 20cm absolute height (clearance above pieces)
         
         geometry_msgs::msg::Pose above_pose;
         above_pose.orientation.x = -0.0028119066264480352;
@@ -1176,7 +1190,7 @@ std::vector<std::pair<geometry_msgs::msg::Pose, Task>> RobotControlNode::getPose
     pose2.orientation.w = -0.00023792324645910412;
     pose2.position.x = posX;
     pose2.position.y = posY;
-    pose2.position.z = zAttach - 0.0107;
+    pose2.position.z = zAttach;
     // Gripper task happens HERE at the lowest point, after reaching position
     poses.push_back(std::make_pair(pose2, mission.task));
 
