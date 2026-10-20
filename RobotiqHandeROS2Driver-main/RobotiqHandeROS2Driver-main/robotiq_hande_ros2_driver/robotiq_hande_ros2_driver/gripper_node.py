@@ -38,7 +38,17 @@ class HandEGripper(Node):
             return response
 
         self.get_logger().info("moving the gripper. positino = {}, speed={}, force={}".format(pos, speed, force))
-        self.gripper.move_and_wait_for_pos(pos, speed, force)
+        try:
+            final_pos, status = self.gripper.move_and_wait_for_pos(pos, speed, force)
+        except (RuntimeError, OSError) as e:  # TimeoutError and socket errors are OSErrors
+            self.get_logger().error("gripper move failed: {}".format(e))
+            response.response = 'error: {}'.format(e)
+            response.final_position = -1
+            response.object_status = -1
+            return response
+        response.final_position = int(final_pos)
+        response.object_status = status.value
+        self.get_logger().info("gripper stopped at {} ({})".format(final_pos, status.name))
         response.response = 'Done'
         return response
 

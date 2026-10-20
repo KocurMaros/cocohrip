@@ -16,9 +16,11 @@ public:
     int row, col;
     std::string color; 
     Task task;
+    double offsetRow, offsetCol;  // piece centre off its square, in squares (game frame)
 
     // Constructor
-    Mission(int row, int col, const std::string& color, Task task);
+    Mission(int row, int col, const std::string& color, Task task,
+            double offsetRow = 0.0, double offsetCol = 0.0);
 };
 
 #endif // MISSION_HPP

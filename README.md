@@ -299,6 +299,21 @@ slots (`storage_first_col` -1.8, `storage_col_step` -1.1 squares,
 The slots restart from the first one when a board with 12 white pieces is
 published (new game).
 
+### Piece centring and adaptive grip
+
+- **Centring:** the camera measures how far each piece the robot picks sits
+  off its square's centre (`Piece.offset_row/offset_col`, in squares). The
+  parallax of the piece tops is learned from the start position when you press
+  S, so set the start pieces up roughly centred. The robot shifts the pick by
+  that offset, at most `pick_offset_max` (0.012 m). Kings get no correction.
+- **Grip:** the gripper closes to `gripper_close_position` (111) +
+  `grip_extra_mm` (10 mm, capped at 20) with `grip_force` (20). The Hand-E
+  stops on the piece and reports it (OBJ = 2): gripped. If the fingers reach
+  the target instead, nothing is between them: it opens and tries again
+  (`grip_retries` 1), then gives up the move, goes home and reports
+  `RobotMove.pick_failed`. The game then asks you to finish the move by hand
+  and continues once the board matches.
+
 ---
 
 ## Debugging Guide

@@ -211,6 +211,68 @@ def cell_features(bgr, norm=None, parity=1, cells=None):
 
 
 # --------------------------------------------------------------------------
+# piece position (centres the robot's gripper on the piece)
+# --------------------------------------------------------------------------
+CENTRE_MARGIN = 30    # px searched beyond the cell edge: a pushed piece sticks out
+_RADII = (22, 25, 28, 31)
+_GRID_BAND = 5        # px either side of a square edge ignored by the rim search
+
+
+def _rim_scores(gx, gy, cands):
+    """Mean |radial gradient| along each candidate circle (cx, cy, R)."""
+    c = np.asarray(cands, np.float32)
+    px = np.clip(np.round(c[:, :1] + c[:, 2:] * np.cos(_ANG)).astype(int), 0, gx.shape[1] - 1)
+    py = np.clip(np.round(c[:, 1:2] + c[:, 2:] * np.sin(_ANG)).astype(int), 0, gx.shape[0] - 1)
+    return np.abs(gx[py, px] * np.cos(_ANG) + gy[py, px] * np.sin(_ANG)).mean(axis=1)
+
+
+def piece_centre(gray, r, c):
+    """(dx, dy) px from the centre of square (r, c) to the piece outline's centre."""
+    # the rim filter of cell_features, searched beyond the cell and refined to 1 px
+    m = CENTRE_MARGIN
+    pad = cv2.copyMakeBorder(np.asarray(gray, np.float32), m, m, m, m, cv2.BORDER_REPLICATE)
+    win = cv2.GaussianBlur(pad[r * CELL:(r + 1) * CELL + 2 * m, c * CELL:(c + 1) * CELL + 2 * m],
+                           (5, 5), 1.2)
+    gx = cv2.Sobel(win, cv2.CV_32F, 1, 0)
+    gy = cv2.Sobel(win, cv2.CV_32F, 0, 1)
+    # the light/dark square edges are far stronger than a black piece's rim
+    near = np.abs((np.arange(win.shape[0]) - m) % CELL - CELL // 2) > CELL // 2 - _GRID_BAND
+    gx[near, :] = gy[near, :] = 0
+    gx[:, near] = gy[:, near] = 0
+    o = CELL // 2 + m
+    span = range(-m, m + 1, 3)
+    cands = [(o + dx, o + dy, R) for dx in span for dy in span for R in _RADII]
+    bx, by, br = cands[int(np.argmax(_rim_scores(gx, gy, cands)))]
+    fine = [(bx + dx, by + dy, R) for dx in range(-2, 3) for dy in range(-2, 3)
+            for R in (br - 1, br, br + 1)]
+    bx, by, _ = fine[int(np.argmax(_rim_scores(gx, gy, fine)))]
+    return np.array([bx - o, by - o], np.float32)
+
+
+def fit_centre_model(gray, cells):
+    """Model d = [1, r, c] @ model of where a centred piece shows up, or None."""
+    # a piece top seen at an angle looks shifted (parallax), affinely across the
+    # board plane; fitted on pieces assumed centred (the start position)
+    if len(cells) < 6:
+        return None
+    A = np.array([(1.0, r, c) for r, c in cells])
+    d = np.array([piece_centre(gray, r, c) for r, c in cells])
+    model = np.linalg.lstsq(A, d, rcond=None)[0]
+    # refit without badly placed pieces so they don't bend the model
+    err = np.linalg.norm(A @ model - d, axis=1)
+    keep = err <= max(3.0, 2.5 * float(np.median(err)))
+    if keep.sum() >= 6:
+        model = np.linalg.lstsq(A[keep], d[keep], rcond=None)[0]
+    return model
+
+
+def piece_offset(gray, r, c, model):
+    """(rows, cols) the piece on (r, c) sits off its square's centre."""
+    dx, dy = piece_centre(gray, r, c) - np.array([1.0, r, c]) @ model
+    return float(dy) / CELL, float(dx) / CELL
+
+
+# --------------------------------------------------------------------------
 # classifier
 # --------------------------------------------------------------------------
 def _sigmoid(x):

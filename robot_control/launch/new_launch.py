@@ -76,6 +76,15 @@ def generate_launch_description():
                 "storage_first_col": -1.8,
                 "storage_col_step": -1.1,
                 "storage_rows": 6,
+                # Adaptive grip: close up to grip_extra_mm (max 20) past
+                # gripper_close_position (Hand-E 0..255); stopping on the piece
+                # = gripped, reaching the target = miss -> retry, then give up
+                "gripper_close_position": 111,
+                "grip_extra_mm": 10.0,
+                "grip_force": 20,
+                "grip_retries": 1,
+                # largest camera-based centring correction when picking [m]
+                "pick_offset_max": 0.012,
             },
             # grasp height of the gripper fingertip frame (ur5e_robotiq_hande_end)
             {"z_attach": ParameterValue(z_attach, value_type=float)},

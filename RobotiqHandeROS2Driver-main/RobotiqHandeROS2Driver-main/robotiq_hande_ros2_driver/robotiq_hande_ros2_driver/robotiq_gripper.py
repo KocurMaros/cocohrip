@@ -280,12 +280,13 @@ class RobotiqGripper:
         var_dict = OrderedDict([(self.POS, clip_pos), (self.SPE, clip_spe), (self.FOR, clip_for), (self.GTO, 1)])
         return self._set_vars(var_dict), clip_pos
 
-    def move_and_wait_for_pos(self, position, speed, force):  # noqa
+    def move_and_wait_for_pos(self, position, speed, force, timeout=5.0):  # noqa
         """Sends commands to start moving towards the given position, with the specified speed and force, and
         then waits for the move to complete.
         :param position: Position to move to [min_position, max_position]
         :param speed: Speed to move at [min_speed, max_speed]
         :param force: Force to use [min_force, max_force]
+        :param timeout: Seconds to wait for the move to finish before raising TimeoutError
         :return: A tuple with an integer representing the last position returned by the gripper after it notified
         that the move had completed, a status indicating how the move ended (see ObjectStatus enum for details). Note
         that it is possible that the position was not reached, if an object was detected during motion.
@@ -293,14 +294,19 @@ class RobotiqGripper:
         set_ok, cmd_pos = self.move(position, speed, force)
         if not set_ok:
             raise RuntimeError("Failed to set variables for move.")
+        deadline = time.time() + timeout
 
         # wait until the gripper acknowledges that it will try to go to the requested position
         while self._get_var(self.PRE) != cmd_pos:
+            if time.time() > deadline:
+                raise TimeoutError("gripper did not acknowledge position {}".format(cmd_pos))
             time.sleep(0.001)
 
         # wait until not moving
         cur_obj = self._get_var(self.OBJ)
         while RobotiqGripper.ObjectStatus(cur_obj) == RobotiqGripper.ObjectStatus.MOVING:
+            if time.time() > deadline:
+                raise TimeoutError("gripper still moving after {} s".format(timeout))
             cur_obj = self._get_var(self.OBJ)
 
         # report the actual position and the object status

@@ -16,7 +16,11 @@ Game flow
      take off the board yourself.
    * ROBOT (black): the AI only plays legal moves (it always captures and
      completes multi-jumps).  The Move message's ``removed_pieces`` contains
-     the captured pieces and, after a huff, the huffed piece.  Control
+     the captured pieces and, after a huff, the huffed piece.  Every piece
+     the robot picks up carries its offset from the square's centre as the
+     camera sees it, so the gripper can centre on it.  If the robot cannot
+     grip a piece it gives up the move and the player finishes it by hand.
+     Control
      LOCKED (default): the game waits for the robot's done message or R.
      UNLOCKED (L): it also continues by itself once the board is still and
      shows the position after the robot's move.
@@ -201,6 +205,16 @@ class CheckersNode(Node):
             return
         if self.game_state != GameState.ROBOT_MOVING:
             return
+        if msg.pick_failed:
+            sq = square_name((msg.pick_row, msg.pick_col))
+            print(f"\n✗ ROBOT COULD NOT GRIP the piece on {sq} - it gave up this move")
+            print("  → Finish the robot's move by hand (as the game board shows).")
+            self._robot_finished()
+            if self.game_state == GameState.PLAYER_TURN:
+                self._ui(f"Robot could not grip the piece on {sq}", "warn",
+                         ["Finish the robot's move by hand: put the pieces where the game "
+                          "board shows them.", "The game continues once the board matches."])
+            return
         print("\n✓ ROBOT FINISHED")
         self._robot_finished()
 
@@ -349,6 +363,7 @@ class CheckersNode(Node):
         self.ref_stale = False
         self.game.max_noise_squares = 1
         self.boardDetection.set_reference(self.last_image, self.game.expected_grid())
+        self.boardDetection.learn_piece_centres(self.last_image, self.game.expected_grid())
         self.publish_board_state()
         self.last_checked_sig = self._sig(grid)
         self.highlight = []
@@ -639,12 +654,14 @@ class CheckersNode(Node):
         cv2.waitKey(1)
 
     # ----------------------------------------------------------- messages
-    @staticmethod
-    def _piece_msg(r, c, value):
+    def _piece_msg(self, r, c, value):
         p = Piece()
         p.row, p.col = int(r), int(c)
         p.color = "white" if value > 0 else "red"
         p.king = abs(value) == 2
+        # a king is twice as tall: the parallax model is for single pieces
+        if not p.king:
+            p.offset_row, p.offset_col = self.boardDetection.piece_offset(self.last_image, r, c)
         return p
 
     def publish_board_state(self):
@@ -667,6 +684,10 @@ class CheckersNode(Node):
         print(f"  → /move_topic: ({plan.move.start[0]},{plan.move.start[1]}) -> "
               f"({msg.target_row},{msg.target_col}), remove "
               f"{[(p.row, p.col) for p in msg.removed_pieces]}")
+        picks = [msg.piece_for_moving] + list(msg.removed_pieces)
+        print("    piece offsets (squares, row/col): "
+              + ", ".join(f"{square_name((p.row, p.col))} {p.offset_row:+.2f}/{p.offset_col:+.2f}"
+                          for p in picks))
 
     def publish_hand_detected_state(self):
         msg = HandDetected()

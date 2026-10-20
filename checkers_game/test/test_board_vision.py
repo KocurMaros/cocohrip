@@ -152,3 +152,24 @@ def test_change_scores_ignore_global_lighting():
     nb, _, _ = bv.normalise(bv.to_gray(b), 1)
     z, raw = bv.change_scores(na, nb)
     assert z.max() < 3.0
+
+
+@pytest.mark.parametrize("rotate_k", [0, 1, 2, 3])
+def test_piece_offset_measures_pushed_piece(rotate_k):
+    """A pushed piece is measured to a few px (1 px ~ 0.6 mm) despite parallax."""
+    rng = np.random.RandomState(rotate_k)
+    start = GameState.initial(1).to_grid()
+    corners = sb.random_corners(rng)
+    parallax = {(r, c): (c - 4, round(1.5 * r) - 12) for r in range(8) for c in range(8)}
+
+    def shot(centres):
+        return sb.to_camera(sb.render_topdown(start, centres=centres), corners,
+                            rotate_k=rotate_k, rng=rng)
+
+    det = make_detector(shot(parallax), corners)
+    det.learn_piece_centres(shot(parallax), start)
+    for (r, c), (sx, sy) in {(5, 0): (12, 10), (2, 3): (-18, 5), (6, 5): (0, -20)}.items():
+        pushed = dict(parallax)
+        pushed[(r, c)] = (parallax[(r, c)][0] + sx, parallax[(r, c)][1] + sy)
+        off_row, off_col = det.piece_offset(shot(pushed), r, c)
+        assert abs(off_col * bv.CELL - sx) <= 4 and abs(off_row * bv.CELL - sy) <= 4

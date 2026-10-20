@@ -65,6 +65,7 @@ class BoardDetection:
         self.last_probs = None
         self.last_change = None
         self.last_light = None
+        self.centre_model = None        # where a centred piece shows up (bv.fit_centre_model)
         self.gameBoardFieldsContours = self._get_grid_squares_contours()
         if interactive:
             self._init()
@@ -214,6 +215,17 @@ class BoardDetection:
     def clear_reference(self):
         self.ref_norm = None
         self.ref_grid = None
+
+    def learn_piece_centres(self, image, grid):
+        """Learn where a centred piece shows up from a position of centred pieces."""
+        cells = [(r, c) for r in range(8) for c in range(8) if int(grid[r][c]) in (1, 2)]
+        self.centre_model = bv.fit_centre_model(bv.to_gray(self.warp(image)), cells)
+
+    def piece_offset(self, image, row, col):
+        """(rows, cols) the piece on (row, col) sits off its square's centre, or (0, 0)."""
+        if self.centre_model is None or image is None:
+            return 0.0, 0.0
+        return bv.piece_offset(bv.to_gray(self.warp(image)), row, col, self.centre_model)
 
     # ------------------------------------------------------------------
     # display

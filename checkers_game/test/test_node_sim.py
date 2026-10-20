@@ -83,12 +83,14 @@ def install_stubs(monkeypatch):
     node_mod.Node = _Node
     rclpy.node = node_mod
     msgs = types.ModuleType("checkers_msgs.msg")
-    msgs.Piece = _msg_class("Piece", row=0, col=0, color="", king=False)
+    msgs.Piece = _msg_class("Piece", row=0, col=0, color="", king=False, offset_row=0.0,
+                            offset_col=0.0)
     msgs.Board = _msg_class("Board", pieces=[])
     msgs.Move = _msg_class("Move", target_row=0, target_col=0, piece_for_moving=None,
                            removed_pieces=[])
     msgs.HandDetected = _msg_class("HandDetected", hand_detected=False)
-    msgs.RobotMove = _msg_class("RobotMove", robot_move_done=False)
+    msgs.RobotMove = _msg_class("RobotMove", robot_move_done=False, pick_failed=False,
+                                pick_row=0, pick_col=0)
     pkg = types.ModuleType("checkers_msgs")
     pkg.msg = msgs
     ximea = types.ModuleType("ximea")
@@ -170,8 +172,9 @@ def run_until(node, clock, cond, max_steps=200):
     return False
 
 
-@pytest.mark.parametrize("seed, unlocked", [(0, False), (1, False), (0, True)])
-def test_node_plays_full_game(monkeypatch, tmp_path, seed, unlocked):
+@pytest.mark.parametrize("seed, unlocked, fail_first_pick",
+                         [(0, False, False), (1, False, True), (0, True, False)])
+def test_node_plays_full_game(monkeypatch, tmp_path, seed, unlocked, fail_first_pick):
     monkeypatch.setenv("HOME", str(tmp_path))        # no cached calibration
     keys = install_stubs(monkeypatch)
     import importlib
@@ -210,10 +213,22 @@ def test_node_plays_full_game(monkeypatch, tmp_path, seed, unlocked):
             break
         if node.game_state == S.ROBOT_MOVING:
             msg = move_pub.msgs[-1]
+            for p in [msg.piece_for_moving] + msg.removed_pieces:
+                assert abs(p.offset_row) < 0.15 and abs(p.offset_col) < 0.15
             for p in msg.removed_pieces:
                 assert world.grid[p.row, p.col] != 0
                 world.grid[p.row, p.col] = 0
             s = msg.piece_for_moving
+            if fail_first_pick:
+                # the robot cannot grip its piece, gives up; the player finishes the move
+                fail_first_pick = False
+                node.robot_move_callback(sys.modules["checkers_msgs.msg"].RobotMove(
+                    robot_move_done=True, pick_failed=True, pick_row=s.row, pick_col=s.col))
+                assert node.game_state == S.PLAYER_TURN and "could not grip" in node.banner[0]
+                assert run_until(node, clock, lambda: node.ref_stale), "unfinished move not seen"
+                world.grid = np.array(node.game.expected_grid())
+                assert run_until(node, clock, lambda: not node.ref_stale), "finished move not seen"
+                continue
             assert world.grid[s.row, s.col] == 2
             world.grid[s.row, s.col] = 0
             world.grid[msg.target_row, msg.target_col] = 2

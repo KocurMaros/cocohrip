@@ -14,7 +14,8 @@ CELL = 100
 
 
 def render_topdown(grid, parity=1, black_piece_level=38, dark_level=22,
-                   light_level=205, white_piece_level=215, rng=None):
+                   light_level=205, white_piece_level=215, rng=None, centres=None):
+    """Top-down board; centres = {(r, c): (dx, dy)} piece-top offsets in px."""
     rng = rng or np.random.RandomState(0)
     img = np.zeros((SIZE, SIZE, 3), np.uint8)
     for r in range(8):
@@ -26,9 +27,13 @@ def render_topdown(grid, parity=1, black_piece_level=38, dark_level=22,
             d = int(grid[r][c])
             if d == 0:
                 continue
-            # tall pieces seen at an angle: top face shifted a bit
-            cx = c * CELL + CELL // 2 + int(rng.randint(-6, 7))
-            cy = r * CELL + CELL // 2 - 8 + int(rng.randint(-4, 5))
+            if centres is not None:
+                cx = c * CELL + CELL // 2 + centres[(r, c)][0]
+                cy = r * CELL + CELL // 2 + centres[(r, c)][1]
+            else:
+                # tall pieces seen at an angle: top face shifted a bit
+                cx = c * CELL + CELL // 2 + int(rng.randint(-6, 7))
+                cy = r * CELL + CELL // 2 - 8 + int(rng.randint(-4, 5))
             if d == 1:
                 cv2.circle(img, (cx, cy + 6), 31, (150, 150, 145), -1)       # side wall
                 cv2.circle(img, (cx, cy), 30, (white_piece_level,) * 3, -1)

@@ -27,6 +27,7 @@
 #include "geometry_msgs/msg/point_stamped.hpp"
 #include <mutex>
 #include <atomic>
+#include <chrono>
 #include <fstream>
 #include "leap_gesture_interface/msg/leap_hand.hpp"
 #include "leap_gesture_interface/msg/leap_finger.hpp"
@@ -184,6 +185,25 @@ private:
 
     void openGripper();
     void closeGripper();
+
+    // Adaptive grip (ROS parameters gripper_close_position, grip_extra_mm,
+    // grip_force, grip_retries, pick_offset_max - see the constructor): the
+    // gripper closes past the piece width; stopping on the piece = gripped,
+    // reaching the target = nothing between the fingers.
+    static constexpr double kHandeCountsPerMm = 255.0 / 50.0;  // 50 mm stroke over 0..255
+    static constexpr int kGripStatusGripped = 2;               // OBJ: stopped closing on an object
+    int gripCloseTarget = 111;
+    int gripForce = 20;
+    int gripRetries = 1;
+    double pickOffsetMax = 0.012;  // largest camera-based centring correction [m]
+    int gripAttempts = 0;          // close commands sent for the current pick
+    bool gripPending = false;      // waiting for the gripper's answer
+    std::chrono::steady_clock::time_point gripRequestTime;
+    std::atomic<bool> pickFailed{false};  // reported with the next move-done message
+    int pickFailedRow = 0, pickFailedCol = 0;
+    void onGripResult(int attempt, int finalPosition, int objectStatus);
+    void giveUpPick();
+    void publishMoveDone();
 };
 
 #endif // ROBOT_CONTROL_NODE_HPP
