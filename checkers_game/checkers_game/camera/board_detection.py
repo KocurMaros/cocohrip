@@ -216,16 +216,19 @@ class BoardDetection:
         self.ref_norm = None
         self.ref_grid = None
 
+    def _bordered_gray(self, image):
+        return bv.to_gray(bv.warp_bordered(image, self.bounderies, self.rotation))
+
     def learn_piece_centres(self, image, grid):
         """Learn where a centred piece shows up from a position of centred pieces."""
         cells = [(r, c) for r in range(8) for c in range(8) if int(grid[r][c]) in (1, 2)]
-        self.centre_model = bv.fit_centre_model(bv.to_gray(self.warp(image)), cells)
+        self.centre_model = bv.fit_centre_model(self._bordered_gray(image), cells)
 
     def piece_offset(self, image, row, col):
         """(rows, cols) the piece on (row, col) sits off its square's centre, or (0, 0)."""
         if self.centre_model is None or image is None:
             return 0.0, 0.0
-        return bv.piece_offset(bv.to_gray(self.warp(image)), row, col, self.centre_model)
+        return bv.piece_offset(self._bordered_gray(image), row, col, self.centre_model)
 
     # ------------------------------------------------------------------
     # display

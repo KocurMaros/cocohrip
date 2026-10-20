@@ -214,61 +214,125 @@ def cell_features(bgr, norm=None, parity=1, cells=None):
 # piece position (centres the robot's gripper on the piece)
 # --------------------------------------------------------------------------
 CENTRE_MARGIN = 30    # px searched beyond the cell edge: a pushed piece sticks out
+CENTRE_BORDER = 2 * CENTRE_MARGIN   # surroundings kept around the board (warp_bordered)
 _RADII = (22, 25, 28, 31)
 _GRID_BAND = 5        # px either side of a square edge ignored by the rim search
+_STEP = 3             # px between candidate circle centres (then refined to 1 px)
+_K_MAX = 0.04         # largest lean per px of distance: 8 mm pieces, camera 0.2 m up
+_RIM_CAP = 1.0        # log-gradient cap: score how much of a circle has an edge
 
 
-def _rim_scores(gx, gy, cands):
-    """Mean |radial gradient| along each candidate circle (cx, cy, R)."""
+def _rim_scores(gx, gy, cands, cap=np.inf):
+    """Mean |radial gradient| (each point at most `cap`) along each circle (cx, cy, R)."""
     c = np.asarray(cands, np.float32)
     px = np.clip(np.round(c[:, :1] + c[:, 2:] * np.cos(_ANG)).astype(int), 0, gx.shape[1] - 1)
     py = np.clip(np.round(c[:, 1:2] + c[:, 2:] * np.sin(_ANG)).astype(int), 0, gx.shape[0] - 1)
-    return np.abs(gx[py, px] * np.cos(_ANG) + gy[py, px] * np.sin(_ANG)).mean(axis=1)
+    radial = np.abs(gx[py, px] * np.cos(_ANG) + gy[py, px] * np.sin(_ANG))
+    return np.minimum(radial, cap).mean(axis=1)
 
 
-def piece_centre(gray, r, c):
-    """(dx, dy) px from the centre of square (r, c) to the piece outline's centre."""
-    # the rim filter of cell_features, searched beyond the cell and refined to 1 px
-    m = CENTRE_MARGIN
-    pad = cv2.copyMakeBorder(np.asarray(gray, np.float32), m, m, m, m, cv2.BORDER_REPLICATE)
-    win = cv2.GaussianBlur(pad[r * CELL:(r + 1) * CELL + 2 * m, c * CELL:(c + 1) * CELL + 2 * m],
-                           (5, 5), 1.2)
+def warp_bordered(image, corners, rotation=0):
+    """warp() plus CENTRE_BORDER px of the board's surroundings on every side."""
+    # a piece on an edge square, pushed or seen at an angle, can stick out of the board
+    b = CENTRE_BORDER
+    H = np.array([[1.0, 0, b], [0, 1.0, b], [0, 0, 1.0]]) @ homography(corners, rotation)
+    return cv2.warpPerspective(image, H, (SIZE + 2 * b, SIZE + 2 * b), flags=cv2.INTER_AREA)
+
+
+def _rim_gradients(gray, r, c):
+    """(gx, gy, half): log gradients around square (r, c), its centre at (half, half)."""
+    # gray: warp_bordered() image; the grid lines are blanked
+    m, b = CENTRE_MARGIN, CENTRE_BORDER
+    half = CELL // 2 + 2 * m
+    x0 = c * CELL + CELL // 2 - half                # window origin, board px
+    y0 = r * CELL + CELL // 2 - half
+    win = gray[y0 + b:y0 + b + 2 * half, x0 + b:x0 + b + 2 * half]
+    # log: an edge counts by its contrast RATIO, so a black piece's rim on a dark
+    # square is not drowned by its own outline against a light square
+    win = cv2.GaussianBlur(np.log1p(np.asarray(win, np.float32)), (5, 5), 1.2)
     gx = cv2.Sobel(win, cv2.CV_32F, 1, 0)
     gy = cv2.Sobel(win, cv2.CV_32F, 0, 1)
     # the light/dark square edges are far stronger than a black piece's rim
-    near = np.abs((np.arange(win.shape[0]) - m) % CELL - CELL // 2) > CELL // 2 - _GRID_BAND
-    gx[near, :] = gy[near, :] = 0
-    gx[:, near] = gy[:, near] = 0
-    o = CELL // 2 + m
-    span = range(-m, m + 1, 3)
-    cands = [(o + dx, o + dy, R) for dx in span for dy in span for R in _RADII]
-    bx, by, br = cands[int(np.argmax(_rim_scores(gx, gy, cands)))]
-    fine = [(bx + dx, by + dy, R) for dx in range(-2, 3) for dy in range(-2, 3)
-            for R in (br - 1, br, br + 1)]
-    bx, by, _ = fine[int(np.argmax(_rim_scores(gx, gy, fine)))]
-    return np.array([bx - o, by - o], np.float32)
+    for axis, origin in ((0, y0), (1, x0)):
+        d = (np.arange(2 * half) + origin) % CELL
+        near = np.minimum(d, CELL - d) < _GRID_BAND
+        if axis == 0:
+            gx[near, :] = gy[near, :] = 0
+        else:
+            gx[:, near] = gy[:, near] = 0
+    return gx, gy, half
+
+
+def lean_at(model, r, c):
+    """(dx, dy) px a piece top on (r, c) shows up off its foot: k * position + t."""
+    k, tx, ty = model
+    return np.array([k * (c * CELL + CELL / 2) + tx, k * (r * CELL + CELL / 2) + ty])
+
+
+def piece_centre(gray, r, c, lean=(0.0, 0.0)):
+    """(dx, dy) px from the centre of square (r, c) to the centre of the piece's foot."""
+    # gray: warp_bordered() image.  A piece is a cylinder: the rim filter of
+    # cell_features scores its foot circle plus its top circle (foot + `lean`)
+    # together, so whichever stands out against the background pins it - the
+    # top on a dark square, the foot when the top reaches a light one
+    gx, gy, half = _rim_gradients(gray, r, c)
+    lean = np.clip(np.asarray(lean, np.float32), -CENTRE_MARGIN, CENTRE_MARGIN)
+
+    def best(cands):
+        cands = np.asarray(cands, np.float32)
+        score = _rim_scores(gx, gy, cands, _RIM_CAP)
+        if lean.any():
+            tops = cands.copy()
+            tops[:, :2] += lean
+            score = score + _rim_scores(gx, gy, tops, _RIM_CAP)
+        return cands[int(np.argmax(score))]
+
+    span = range(-CENTRE_MARGIN, CENTRE_MARGIN + 1, _STEP)
+    bx, by, br = best([(half + dx, half + dy, R) for dx in span for dy in span for R in _RADII])
+    bx, by, _ = best([(bx + dx, by + dy, R) for dx in range(-2, 3) for dy in range(-2, 3)
+                      for R in (br - 1, br, br + 1)])
+    return np.array([bx - half, by - half], np.float32)
 
 
 def fit_centre_model(gray, cells):
-    """Model d = [1, r, c] @ model of where a centred piece shows up, or None."""
-    # a piece top seen at an angle looks shifted (parallax), affinely across the
-    # board plane; fitted on pieces assumed centred (the start position)
+    """Lean model (k, tx, ty) for lean_at() from pieces standing centred, or None."""
+    # a piece top seen at an angle shifts (parallax) away from the point below
+    # the camera, in proportion to the distance: k * position + t for ANY camera
+    # pose.  The model is the one whose predicted tops are the best circles over
+    # all pieces together (each piece normalised to its own best circle), so a
+    # top hard to see on its own - white on a light square - can't pull it to the foot
     if len(cells) < 6:
         return None
-    A = np.array([(1.0, r, c) for r, c in cells])
-    d = np.array([piece_centre(gray, r, c) for r, c in cells])
-    model = np.linalg.lstsq(A, d, rcond=None)[0]
-    # refit without badly placed pieces so they don't bend the model
-    err = np.linalg.norm(A @ model - d, axis=1)
-    keep = err <= max(3.0, 2.5 * float(np.median(err)))
-    if keep.sum() >= 6:
-        model = np.linalg.lstsq(A[keep], d[keep], rcond=None)[0]
-    return model
+    m = CENTRE_MARGIN
+    span = np.arange(-m, m + 1, _STEP)
+    maps = []
+    for r, c in cells:
+        gx, gy, half = _rim_gradients(gray, r, c)
+        cands = [(half + dx, half + dy, R) for dy in span for dx in span for R in _RADII]
+        s = _rim_scores(gx, gy, cands, _RIM_CAP).reshape(len(span), len(span), len(_RADII))
+        maps.append(s.max(axis=2) / max(float(s.max()), 1e-6))
+    maps = np.array(maps)                           # (piece, dy, dx): a top there
+    pos = np.array([(c * CELL + CELL / 2, r * CELL + CELL / 2) for r, c in cells])
+    shifts = np.arange(-2 * m, 2 * m + 1, _STEP)
+    t = np.stack(np.meshgrid(shifts, shifts), -1).reshape(-1, 2)
+    piece = np.arange(len(cells))
+    best, best_score = (0.0, 0.0, 0.0), -1.0
+    for k in np.arange(0.0, _K_MAX + 1e-9, 0.001):
+        lean = k * pos[None] + t[:, None]           # (t, piece, 2)
+        ix = np.rint((lean[..., 0] + m) / _STEP).astype(int)
+        iy = np.rint((lean[..., 1] + m) / _STEP).astype(int)
+        inside = (ix >= 0) & (ix < len(span)) & (iy >= 0) & (iy < len(span))
+        score = np.where(inside, maps[piece, iy.clip(0, len(span) - 1),
+                                      ix.clip(0, len(span) - 1)], 0.0).sum(axis=1)
+        j = int(np.argmax(score))
+        if score[j] > best_score:
+            best, best_score = (k, *t[j]), float(score[j])
+    return np.array(best, np.float64)
 
 
 def piece_offset(gray, r, c, model):
-    """(rows, cols) the piece on (r, c) sits off its square's centre."""
-    dx, dy = piece_centre(gray, r, c) - np.array([1.0, r, c]) @ model
+    """(rows, cols) the piece on (r, c) sits off its square's centre (gray: warp_bordered)."""
+    dx, dy = piece_centre(gray, r, c, lean=lean_at(model, r, c))
     return float(dy) / CELL, float(dx) / CELL
 
 
