@@ -305,7 +305,7 @@ published (new game).
   off its square's centre (`Piece.offset_row/offset_col`, in squares). The
   parallax of the piece tops is learned from the start position when you press
   S, so set the start pieces up roughly centred. The robot shifts the pick by
-  that offset, at most `pick_offset_max` (0.012 m). Kings get no correction.
+  that offset, at most `pick_offset_max` (0.012 m).
 - **Grip:** the gripper closes to `gripper_close_position` (111) +
   `grip_extra_mm` (10 mm, capped at 20) with `grip_force` (20). The Hand-E
   stops on the piece and reports it (OBJ = 2): gripped. If the fingers reach

@@ -659,9 +659,7 @@ class CheckersNode(Node):
         p.row, p.col = int(r), int(c)
         p.color = "white" if value > 0 else "red"
         p.king = abs(value) == 2
-        # a king is twice as tall: the parallax model is for single pieces
-        if not p.king:
-            p.offset_row, p.offset_col = self.boardDetection.piece_offset(self.last_image, r, c)
+        p.offset_row, p.offset_col = self.boardDetection.piece_offset(self.last_image, r, c)
         return p
 
     def publish_board_state(self):
