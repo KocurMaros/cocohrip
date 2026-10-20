@@ -170,8 +170,8 @@ def run_until(node, clock, cond, max_steps=200):
     return False
 
 
-@pytest.mark.parametrize("seed", [0, 1])
-def test_node_plays_full_game(monkeypatch, tmp_path, seed):
+@pytest.mark.parametrize("seed, unlocked", [(0, False), (1, False), (0, True)])
+def test_node_plays_full_game(monkeypatch, tmp_path, seed, unlocked):
     monkeypatch.setenv("HOME", str(tmp_path))        # no cached calibration
     keys = install_stubs(monkeypatch)
     import importlib
@@ -200,6 +200,10 @@ def test_node_plays_full_game(monkeypatch, tmp_path, seed):
 
     keys.append(ord('s'))
     assert run_until(node, clock, lambda: node.game.started)
+    if unlocked:
+        keys.append(ord('l'))
+        node.update()
+        assert not node.control_locked
     huffs = 0
     for ply in range(60):
         if node.game_state == S.GAME_OVER:
@@ -213,7 +217,16 @@ def test_node_plays_full_game(monkeypatch, tmp_path, seed):
             assert world.grid[s.row, s.col] == 2
             world.grid[s.row, s.col] = 0
             world.grid[msg.target_row, msg.target_col] = 2
-            node.robot_move_callback(sys.modules["checkers_msgs.msg"].RobotMove(robot_move_done=True))
+            if unlocked:
+                # no done message: the camera must see the robot's move
+                assert run_until(node, clock, lambda: node.game_state != S.ROBOT_MOVING), \
+                    "robot move not detected"
+            else:
+                if ply < 2:
+                    assert not run_until(node, clock,
+                                         lambda: node.game_state != S.ROBOT_MOVING, 20)
+                node.robot_move_callback(
+                    sys.modules["checkers_msgs.msg"].RobotMove(robot_move_done=True))
             assert np.array_equal(world.grid, np.array(node.game.expected_grid()))
             continue
         assert node.game_state == S.PLAYER_TURN and node.game.turn == HUMAN

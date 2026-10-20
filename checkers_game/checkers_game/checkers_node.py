@@ -16,7 +16,10 @@ Game flow
      take off the board yourself.
    * ROBOT (black): the AI only plays legal moves (it always captures and
      completes multi-jumps).  The Move message's ``removed_pieces`` contains
-     the captured pieces and, after a huff, the huffed piece.
+     the captured pieces and, after a huff, the huffed piece.  Control
+     LOCKED (default): the game waits for the robot's done message or R.
+     UNLOCKED (L): it also continues by itself once the board is still and
+     shows the position after the robot's move.
 4. The game ends when a side has no pieces / no legal move, or by draw
    (40 moves each without capture or man move, or 3-fold repetition).
 
@@ -25,7 +28,7 @@ camera + hand tracking, detection view, status / move list.
 
 Keys (game window focused): S start, F force-start from detected
 position, 1/2/3 difficulty, SPACE re-check the board now, R robot finished
-(manual), H show your legal moves, Q quit.
+(manual), L lock/unlock control, H show your legal moves, Q quit.
 """
 
 import threading
@@ -127,6 +130,7 @@ class CheckersNode(Node):
         self.robot_done = True
         self.robot_finished_at = None
         self.verify_after_robot = False
+        self.control_locked = True         # False: robot done is detected by the camera
 
         # detection stability tracking
         self.cam_lock = threading.Lock()
@@ -162,7 +166,8 @@ class CheckersNode(Node):
         print("=" * 60)
         print("  S = start (pieces in start position)   F = start from current position")
         print("  1/2/3 = easy/medium/hard   SPACE = re-check board now")
-        print("  R = robot finished (manual)   H = show my legal moves   Q = quit")
+        print("  R = robot finished (manual)   L = lock/unlock control (unlocked: no R needed)")
+        print("  H = show my legal moves   Q = quit")
         print(f"  Rules: English draughts (WCDF) + huff rule; "
               f"{'you' if self.game.first == HUMAN else 'robot (black)'} moves first")
         print(f"  Difficulty level: {self.difficulty_level}\n")
@@ -248,6 +253,8 @@ class CheckersNode(Node):
 
         if self.game_state == GameState.PLAYER_TURN:
             self._player_turn(grid)
+        elif self.game_state == GameState.ROBOT_MOVING and not self.control_locked:
+            self._auto_robot_done(grid)
 
         self._draw(grid)
 
@@ -294,6 +301,12 @@ class CheckersNode(Node):
             if self.game_state == GameState.ROBOT_MOVING:
                 print("\n[R] robot move marked as finished manually")
                 self._robot_finished()
+        elif key in (ord('l'), ord('L')):
+            self.control_locked = not self.control_locked
+            mode = ("LOCKED - press R when the robot is done" if self.control_locked
+                    else "UNLOCKED - the game continues once the board is still")
+            print(f"\n[L] control {mode}")
+            self.details = [f"Control {mode}"]
         elif key in (ord('h'), ord('H')):
             self._print_hints(to_ui=True)
         elif key in (ord('q'), ord('Q')):
@@ -519,6 +532,14 @@ class CheckersNode(Node):
         print("  Waiting for the robot ... (press R if it finished but did not report)")
         print("-" * 60)
 
+    def _auto_robot_done(self, grid):
+        """Unlocked control: finish the robot move once the camera confirms it."""
+        # every square must be seen - an arm stopped over the board hides squares
+        if (self._board_is_settled() and not (grid == -1).any()
+                and not self.game.mismatches(grid, use_color=False)):
+            print("\n✓ ROBOT FINISHED (board still in the expected position)")
+            self._robot_finished()
+
     def _game_over(self):
         self.game_state = GameState.GAME_OVER
         w = self.game.winner()
@@ -600,6 +621,7 @@ class CheckersNode(Node):
             ("exposure", f"{getattr(self.ximeaCamera, 'exposure_us', 0) / 1000:.0f} ms"),
             ("unsure sq.", self.unsure),
             ("motion", f"{self.motion:.1f} %"),
+            ("control", "LOCKED (R)" if self.control_locked else "UNLOCKED (auto)"),
         ]
         status = {
             "banner": self.banner,
@@ -607,7 +629,7 @@ class CheckersNode(Node):
             "facts": facts,
             "stability": settled_for / max(self.stable_time, 1e-3),
             "log": self.game.log,
-            "keys": "S start  F force  1/2/3 level  SPACE re-check  R robot done  H hints  Q quit",
+            "keys": "S start  F force  1/2/3 level  SPACE check  R done  L lock  H hints  Q quit",
         }
         self.dashboard.render(self._board_image(grid), self.tiles[0], self.tiles[1], status)
 
