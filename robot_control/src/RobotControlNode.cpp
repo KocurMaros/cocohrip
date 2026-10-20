@@ -1,6 +1,8 @@
 #include "robot_control/RobotControlNode.hpp"
 #include "robot_control/RobotPoseUtility.hpp"
 #include <cmath>
+#include <cstdlib>
+#include <filesystem>
 
 using namespace std::chrono_literals;
 
@@ -906,7 +908,14 @@ double RobotControlNode::calculate_palm_LM_distance_to_tool0(const geometry_msgs
 
     if(isRobotMoving.load() && !isStop.load()) {
         std::ofstream outfile;
-        outfile.open("/home/collab/amavet_ws/src/robot_control/src/" + currentFileName, std::ios_base::app);
+        static const std::filesystem::path dataDir = [] {
+            const char* home = std::getenv("HOME");
+            std::filesystem::path dir = std::filesystem::path(home ? home : "/tmp") / "robot_data";
+            std::error_code ec;
+            std::filesystem::create_directories(dir, ec);
+            return dir;
+        }();
+        outfile.open(dataDir / currentFileName, std::ios_base::app);
         if (outfile.is_open()) {
             outfile << currentPosition.position.x << ","
                     << currentPosition.position.y << ","

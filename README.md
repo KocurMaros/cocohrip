@@ -45,13 +45,13 @@ The system consists of three main packages:
 
 ### Terminal 1: Robot Bringup
 ```bash
-source ~/amavet_ws/install/setup.bash
+source ~/checkers_ws/install/setup.bash
 ros2 launch cocohrip_control bringup_all.launch.py
 ```
 
 ### Terminal 2: Robot Control Node
 ```bash
-source ~/amavet_ws/install/setup.bash
+source ~/checkers_ws/install/setup.bash
 ros2 launch robot_control new_launch.py
 ```
 
@@ -60,13 +60,13 @@ ros2 launch robot_control new_launch.py
 # If needed after reboot (camera memory allocation)
 sudo tee /sys/module/usbcore/parameters/usbfs_memory_mb >/dev/null <<<0
 
-cd ~/amavet_ws && source install/setup.bash
+cd ~/checkers_ws && source install/setup.bash
 ros2 launch checkers_game checkers_game_launch.launch.py
 ```
 
 ### Optional: Leap Motion Gesture Interface
 ```bash
-source ~/amavet_ws/install/setup.bash
+source ~/checkers_ws/install/setup.bash
 ros2 run leap_gesture_interface leap_example_node
 ```
 
