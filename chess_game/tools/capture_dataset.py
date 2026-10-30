@@ -248,6 +248,10 @@ class Recorder:
         step = self.photos
         after = ins.after
         files = []
+        extra = {}
+        if ins.kind == "game" and self.planner.game_state is not None:
+            board, human_white = self.planner.game_state     # position before the move
+            extra = {"uci": ins.move.uci(), "fen_before": board.fen(), "human_white": human_white}
         with open(self.labels_path, "a") as f:
             for k, factor in enumerate(BRACKET):
                 exp = self.cam.set_exposure(base * factor)
@@ -257,7 +261,7 @@ class Recorder:
                 files.append(name)
                 rec = label_record(name, after, self.corners / WORK_SCALE, exp, self.lighting, step,
                                    ins.text, self.full_size, self.a1_corner, kind=ins.kind,
-                                   time=time.time())
+                                   time=time.time(), **extra)
                 f.write(json.dumps(rec) + "\n")
                 if k == 0:
                     self.ref = work_image(img)

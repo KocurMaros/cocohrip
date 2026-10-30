@@ -148,7 +148,7 @@ class ImageFolderCamera:
         self.i += 1
 
     def set_exposure(self, exposure_us):
-        self.exposure_us = int(exposure_us)
+        self.exposure_us = int(np.clip(exposure_us, EXPOSURE_MIN_US, EXPOSURE_MAX_US))
         return self.exposure_us
 
     def auto_expose(self, measure=white_level, **kw):

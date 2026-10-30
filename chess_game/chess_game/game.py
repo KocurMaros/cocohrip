@@ -267,10 +267,15 @@ class ChessGame:
     # ------------------------------------------------------------ human move
     def infer_human_move(self, obs):
         """Match the camera observation against every legal human move."""
-        obs = _check_obs(obs)
-        n = obs.shape[1]
         if not self.human_to_move:
             raise RuntimeError("not the human's turn")
+        return self.infer_move(obs)
+
+    def infer_move(self, obs):
+        """Match the camera observation against every legal move of the
+        side to move (and against "no move")."""
+        obs = _check_obs(obs)
+        n = obs.shape[1]
         current = self.expected_labels()
 
         # candidates grouped by what the camera can tell apart (a colour-only
