@@ -37,7 +37,7 @@ have ninja || PKGS="$PKGS ninja-build"
 have g++ || PKGS="$PKGS g++"
 dpkg -s libopenblas-dev >/dev/null 2>&1 || PKGS="$PKGS libopenblas-dev"
 dpkg -s zlib1g-dev >/dev/null 2>&1 || PKGS="$PKGS zlib1g-dev"
-dpkg -s python3-venv >/dev/null 2>&1 || PKGS="$PKGS python3-venv"
+if [ $WANT_VENV = 1 ]; then python3 -c "import ensurepip" 2>/dev/null || PKGS="$PKGS python3-venv"; fi
 if [ -n "$PKGS" ]; then run sudo apt-get install -y $PKGS; else echo "   all installed"; fi
 
 echo "== python-chess"
