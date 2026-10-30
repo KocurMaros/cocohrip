@@ -141,6 +141,7 @@ def run_game(monkeypatch, seed, human_white, engine="random", max_plies=80, robo
 
     class FakeCamera:
         exposure_us = 40000
+        gain_db = 0.0
 
         def __init__(self):
             pass
@@ -153,6 +154,9 @@ def run_game(monkeypatch, seed, human_white, engine="random", max_plies=80, robo
 
         def set_exposure(self, us):
             return self.exposure_us
+
+        def adjust(self, ratio):
+            pass
 
         def close(self):
             pass

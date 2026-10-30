@@ -214,9 +214,9 @@ class Recorder:
         if corners is not None and np.abs(corners - self.corners).max() < 25:
             self.set_corners(corners)              # follow small shifts of the mat
         level = self._board_level(frame)
-        base = self.cam.exposure_us
         if not 150 <= level <= 230:
-            base = self.cam.set_exposure(base * 190.0 / max(level, 1.0))
+            self.cam.adjust(190.0 / max(level, 1.0))
+        base = self.cam.exposure_us
         step = self.photos
         after = ins.after
         files = []
@@ -233,7 +233,7 @@ class Recorder:
                 files.append(name)
                 rec = label_record(name, after, self.corners / WORK_SCALE, exp, self.lighting, step,
                                    ins.text, self.full_size, self.a1_corner, kind=ins.kind,
-                                   time=time.time(), **extra)
+                                   time=time.time(), gain_db=round(self.cam.gain_db, 2), **extra)
                 f.write(json.dumps(rec) + "\n")
                 if k == 0:
                     self.ref = work_image(img)
@@ -290,7 +290,7 @@ class Recorder:
         canvas[10:10 + diag.shape[0], cam.shape[1] + 20:cam.shape[1] + 20 + diag.shape[1]] = diag
         x0 = cam.shape[1] + 24
         info = [f"photos: {self.photos}   lighting: {self.lighting} (L)",
-                f"exposure: {self.cam.exposure_us / 1000:.0f} ms   threshold: {self.threshold:.1f} (+/-)",
+                f"exposure: {self.cam.exposure_us / 1000:.0f} ms +{self.cam.gain_db:.0f} dB   threshold: {self.threshold:.1f} (+/-)",
                 f"seen piece/square pairs: {len(self.planner.coverage)} / 768",
                 f"still: {min(still, 9.9):.1f} s"]
         for i, t in enumerate(info):

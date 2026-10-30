@@ -38,6 +38,8 @@ def test_random_and_factory_fallback():
     assert RandomEngine(seed=0).choose_move(board) in board.legal_moves
     eng = create_engine("stockfish:/nonexistent/stockfish")
     assert isinstance(eng, BuiltinEngine)
+    assert isinstance(create_engine("maia:net_dir=/nonexistent"), BuiltinEngine)
+    assert isinstance(create_engine("leela:command=/nonexistent/lc0"), BuiltinEngine)
     with pytest.raises(ValueError):
         create_engine("nonsense")
 

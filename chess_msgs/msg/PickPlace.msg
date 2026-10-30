@@ -1,8 +1,8 @@
 # One pick-and-place for robot_control, in its game frame: row 0 = robot's
 # side ... 7 = human's side, col 0 = human's left (the same frame as
 # checkers_msgs).  Values outside 0..7 or fractional are places beside the
-# board (storage for captured pieces, reserve for promotions) - robot_control
-# maps them with the same two measured corner squares as the board.
+# board (storage for captured pieces) - robot_control maps them with the
+# same two measured corner squares as the board.
 float32 pick_row
 float32 pick_col
 float32 place_row

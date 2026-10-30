@@ -1,14 +1,18 @@
 """Swappable chess engines behind one interface.
 
-    engine = create_engine("stockfish")            # or "lc0", "builtin", "random"
+    engine = create_engine("stockfish")    # or "leela", "maia", "lc0:...", "builtin", "random"
     move = engine.choose_move(board, level=3, time_limit=2.0)
     engine.close()
 
 * ``stockfish`` - any UCI binary on PATH (or ``stockfish:/path/to/binary``);
   the level (1..5) sets Stockfish's "Skill Level".
-* ``lc0`` - Leela Chess Zero, a neural-network engine (GPU).  With Maia
-  weights (``lc0:weights=/path/maia-1500.pb.gz``) it plays like a human of
-  that rating; Maia is meant to be searched with 1 node.
+* ``leela`` - Leela Chess Zero (lc0, a neural-network engine) with the net
+  ``~/chess_engines/leela.pb.gz``; the level sets the search size (1 node =
+  the network's instinct ... 4000 nodes).
+* ``maia`` - lc0 with the Maia nets ``~/chess_engines/maia-<rating>.pb.gz``:
+  plays like a human of that rating; level 1..5 = Maia 1100 .. 1900
+  (searched with 1 node, as Maia is meant to be).
+* ``lc0`` - lc0 with any net (``lc0:weights=/path/net.pb.gz,nodes=100``).
 * ``builtin`` - small alpha-beta search in pure Python, no binary needed
   (fallback, tests, easy levels).
 * ``random`` - random legal move (tests).
@@ -17,6 +21,7 @@ Anything else that speaks UCI works through UciEngine; a PyTorch policy
 network would be one more Engine subclass with the same choose_move().
 """
 
+import os
 import random
 import shutil
 import time
@@ -98,13 +103,38 @@ def stockfish(command=None):
                      name="stockfish")
 
 
+NET_DIR = os.path.expanduser("~/chess_engines")
+MAIA_RATINGS = {1: 1100, 2: 1300, 3: 1500, 4: 1700, 5: 1900}
+LEELA_NODES = {1: 1, 2: 16, 3: 128, 4: 800, 5: 4000}
+
+
+def _lc0_command(command):
+    return command or shutil.which("lc0") or os.path.join(NET_DIR, "lc0")
+
+
 def lc0(command=None, weights=None, nodes=1):
-    """Leela Chess Zero; with Maia weights search 1 node (human-like play,
-    strength = the weights' rating, the level is ignored)."""
-    command = command or shutil.which("lc0") or "lc0"
-    options = {"WeightsFile": weights} if weights else None
-    limits = {lv: {"nodes": nodes} for lv in LEVELS}
-    return UciEngine(command, options=options, level_limits=limits, name="lc0")
+    """lc0 with one net, searching `nodes` nodes at every level."""
+    options = {"WeightsFile": os.path.expanduser(weights)} if weights else None
+    limits = {lv: {"nodes": int(nodes)} for lv in LEVELS}
+    return UciEngine(_lc0_command(command), options=options, level_limits=limits, name="lc0")
+
+
+def leela(command=None, weights=None):
+    weights = os.path.expanduser(weights or os.path.join(NET_DIR, "leela.pb.gz"))
+    return UciEngine(_lc0_command(command), options={"WeightsFile": weights},
+                     level_limits={lv: {"nodes": n} for lv, n in LEELA_NODES.items()}, name="leela")
+
+
+def maia(command=None, net_dir=None):
+    """Human-like play: the level picks the Maia net (rating 1100..1900)."""
+    net_dir = os.path.expanduser(net_dir or NET_DIR)
+    nets = {lv: os.path.join(net_dir, f"maia-{r}.pb.gz") for lv, r in MAIA_RATINGS.items()}
+    missing = [p for p in nets.values() if not os.path.exists(p)]
+    if missing:
+        raise OSError(f"Maia nets missing: {', '.join(missing)}")
+    return UciEngine(_lc0_command(command), options={"WeightsFile": nets[3]},
+                     level_options={lv: {"WeightsFile": p} for lv, p in nets.items()},
+                     level_limits={lv: {"nodes": 1} for lv in LEVELS}, name="maia")
 
 
 # --------------------------------------------------------------------------
@@ -276,8 +306,8 @@ class BuiltinEngine(Engine):
 def create_engine(spec="stockfish", fallback="builtin"):
     """"name" or "name:binary" or "name:key=value,key=value".
 
-    stockfish[:/path]            lc0[:weights=/w.pb.gz,command=/path/lc0,nodes=1]
-    builtin                      random
+    stockfish[:/path]            leela[:weights=/w.pb.gz]      maia[:net_dir=/dir]
+    lc0[:weights=/w.pb.gz,command=/path/lc0,nodes=1]          builtin    random
     If a UCI engine cannot be started, `fallback` is used (None = raise)."""
     name, _, arg = spec.partition(":")
     kwargs = {}
@@ -288,8 +318,12 @@ def create_engine(spec="stockfish", fallback="builtin"):
     try:
         if name == "stockfish":
             return stockfish(kwargs.get("command"))
-        if name in ("lc0", "maia"):
+        if name == "lc0":
             return lc0(kwargs.get("command"), kwargs.get("weights"), int(kwargs.get("nodes", 1)))
+        if name == "leela":
+            return leela(kwargs.get("command"), kwargs.get("weights"))
+        if name == "maia":
+            return maia(kwargs.get("command"), kwargs.get("net_dir"))
         if name == "builtin":
             return BuiltinEngine()
         if name == "random":

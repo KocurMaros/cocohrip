@@ -1,5 +1,6 @@
 # A robot chess move: executed step by step, in order (captured piece
-# off first, castling = king then rook, promotion = pawn off, new piece on).
+# off first, castling = king then rook; a promoting pawn just moves - the
+# new piece exists only in the game).
 # robot_control answers with checkers_msgs/RobotMove on /robot_move_topic.
 string uci
 string san

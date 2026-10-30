@@ -1,96 +1,104 @@
 # chess_game - chess against the UR5e
 
-Status: **foundation only** (branch `feat/chess`). Done: rules glue, move
-inference from the camera, robot pick/place planning, swappable engines, 3-D
-board model, guided dataset recorder, `chess_msgs` draft. Next: piece
-classifier (needs the dataset), the ROS node + dashboard, and the robot_control
-executor.
+Branch `feat/chess`. On the robot PC it lives in its own workspace,
+`~/chess_ws` (a clone of this repo; `~/checkers_ws` is untouched).
 
-## What the camera sees (measured 2026-10-30 on the cell)
+| Part | State |
+|---|---|
+| rules, move recognition, robot pick/place plans (`game.py`) | done, unit tested |
+| engines: Stockfish / Leela / Maia / builtin (`engines.py`) | Stockfish installed; Leela/Maia need the `lc0` binary |
+| ROS node + dashboard (`chess_node.py`) | done, simulated games pass; not run on the cell yet |
+| robot_control executor (`/chess/robot_move`) | done, verified on mock hardware |
+| piece classifier (`vision/classifier.py`, `tools/train_classifier.py`) | pipeline verified on the robot PC GPU; **needs the dataset** |
+| dataset recorder (`tools/capture_dataset.py`) | ready, waiting for the recording session |
+| piece sizes (`config/pieces.yaml`) | **estimates**, to be measured with the gripper |
 
-* Ximea MC050CG, 2464x2056. The checkers node squeezes frames to 600x600
-  (~50 px per square). That's too coarse for chess, so the chess code works on the raw
-  frame (half resolution = ~105 px per square).
-* The camera is **not above the board**. The pose fitted to the board corners puts it
-  ~86 cm up, just outside the **a8 corner** (`BoardModel.camera_position`).
-  Pieces near a8 are seen from the top. Towards h1 they are seen more and more from
-  the side, and tall pieces lean over the squares behind them (away from a8).
-* The checkers corner detector (`checkers_game.camera.board_geometry`) finds
-  the board even with all 32 pieces on it (47/49 junctions). Printed a1 is the
-  raw image's bottom-right corner.
-* The human sits on the printed rank-1 side, the robot on rank 8 (same as checkers).
+## The camera
 
-## Design
+Ximea MC050CG, 2464x2056. The checkers node's 600x600 frames are too coarse,
+so chess uses the raw frame, analysed at half resolution (~105 px per square).
+The camera is ~86 cm up, just outside the **a8 corner**: pieces near a8 are
+seen from the top, near h1 from the side, and tall pieces lean over the squares
+behind them. The human sits on the printed rank-1 side, the robot on rank 8.
 
-```
-Ximea -> BoardModel (pose, square crops) -> classifier (ONNX) -> per-square probabilities
-      -> ChessGame.infer_human_move  (likelihood of every legal move)
-      -> Engine (Stockfish / lc0+Maia / builtin)  -> ChessGame.plan_robot_move
-      -> chess_msgs/ChessRobotMove (pick/place steps) -> robot_control -> RobotMove done
-```
+## How a move is recognised
 
-### Detection
+1. **Upright crops** (`vision/board_model.py`): from the camera pose (solvePnP
+   on the board corners) every square's vertical axis is projected. Its crop
+   is rotated so that the piece stands upright with its base at the same spot.
+2. **CNN** (ResNet18, ImageNet-pretrained, fine-tuned on our photos) classifies
+   the 64 crops into empty + 12 pieces. It runs as ONNX in OpenCV (no torch in
+   the ROS environment), only when the board has been still for `stable_time`.
+3. **Likelihood matching** (`game.py`): every legal move predicts a board,
+   scored over all 64 squares; the best one wins if it clearly beats the
+   runner-up. Colour alone already identifies every move. A mistake is shown
+   with the squares that differ and the closest legal move.
+4. **Lighting**: photos in dark / normal / too bright light x 3 exposures,
+   augmentation, and automatic exposure + gain on the board's white squares.
 
-1. **Upright square crops** (`vision/board_model.py`). From the camera pose, each
-   square's vertical axis is projected into the image. The crop around it is rotated
-   so that the piece always stands upright with its base at the same spot, so a
-   bishop looks the same on a8 and on h1.
-2. **One CNN classifies all 64 crops** into 13 classes (empty + 12 pieces). Plan:
-   a small ImageNet-pretrained net (MobileNetV3 / ResNet18) fine-tuned on our own
-   photos, exported to ONNX. It runs with OpenCV's DNN module, which is already on
-   the robot PC, so no torch is needed there. It only runs when the board is still.
-3. **No single square is trusted** (`game.py`). Every legal move predicts a board,
-   and each prediction is scored by the log-likelihood of all 64 squares; the best
-   one wins if it beats the runner-up clearly. Colour alone (empty / white / black)
-   already identifies every legal move, castling and en passant included. Piece
-   types are only needed for the promotion piece, starting from an arbitrary
-   position, and checking the set-up ("knight and bishop swapped on b1/c1").
-4. **Lighting**: photos under several lightings x 3 exposures (bracketing),
-   strong colour / gamma / white-balance / noise augmentation, plus the existing
-   software auto-exposure on the board's white squares.
+### Rules decisions
 
-The labels need no manual annotation: every photo is stored with the FEN of the
-physical board and the board corners, so the 64 crops and their classes follow
-from that. The same data could also train a YOLO detector (boxes from the
-projected piece cylinders) if the per-square classifier turns out not to be enough.
+* **Colour**: the colour you set up on your side is yours (S). With black,
+  the robot (white) starts. F starts from any position (C picks your colour).
+* **Promotion**: there are no spare pieces. The pawn stays a pawn on the
+  board and becomes a queen in the game (P cycles Q/R/B/N for your pawns); the
+  dashboard marks it with an orange "P", and the robot grips it as a pawn.
+* **Captures**: the robot takes your captured pieces to storage, one column of
+  8 slots left of the board, then one right of it (as in checkers). You take
+  the robot's pieces off yourself.
 
-### Dataset recording (`tools/capture_dataset.py`)
-
-The tool tells you what to do: "Move the BLACK knight g8 -> f6", with the target
-position drawn and the squares highlighted. You do it and take your hand away.
-When the board is still and exactly those squares changed, it takes 3 photos
-(3 exposures) and shows the next instruction. Positions alternate between random
-legal games (white or black on your side), single pieces scattered to the squares
-seen least so far (every piece on every square), and the empty board. `L` switches
-the lighting tag, `U` deletes and retakes wrong photos, and `--resume` continues a
-session. Target: ~300 positions per lighting (about 20-25 min), for 3-4 lightings.
-
-### Engines (`engines.py`)
-
-`create_engine("stockfish" | "lc0:weights=maia-1500.pb.gz" | "builtin" | "random")`,
-all with `choose_move(board, level 1..5, time_limit)`. Stockfish sets "Skill
-Level" from the level. lc0 with Maia weights plays like a human of a chosen
-rating (a neural-network engine). `builtin` is a pure-Python alpha-beta search,
-used as the fallback when no binary is installed. A PyTorch policy network would
-be one more `Engine` subclass.
-
-### Robot (`game.plan_robot_move`, `chess_msgs`)
-
-A robot move becomes a list of pick/place steps: the captured piece goes off first
-(to a storage slot), castling moves the king then the rook, en passant removes the
-passed pawn, and promotion moves the pawn off and brings the new piece from a
-reserve slot (or the human swaps it). Positions are in robot_control's game frame
-(`frames.py`; off-board slots are just rows/cols outside 0..7), so its corner
-calibration is reused. robot_control needs a new subscriber that executes
-`ChessRobotMove` steps with a **per-piece grip height and width** and a **travel
-height** above the tallest piece. The current fixed `z_attach` and 9 cm travel
-height would knock tall pieces over.
-
-## Run
+## Robot PC
 
 ```bash
-# tests (no ROS, no camera; needs: pip install chess pytest)
-cd chess_game && python3 -m pytest test -q
-# record the dataset on the robot PC (game nodes stopped, workspace sourced)
-python3 chess_game/tools/capture_dataset.py --lighting room
+# build (once / after git pull) - only ROS Jazzy sourced
+cd ~/chess_ws && colcon build
+# run: robot bringup + robot_control from ~/chess_ws as for checkers, then
+source ~/chess_ws/install/setup.bash
+ros2 launch chess_game chess_game_launch.py engine:=stockfish level:=3
+#   engine: stockfish | leela | maia (level 1..5 = Maia 1100..1900) | builtin
 ```
+
+Python on the robot PC: `python-chess` (pip, user), `stockfish` (apt),
+training venv `~/chess_venv` (PyTorch + CUDA). Leela / Maia need `lc0` in
+`~/chess_engines/` or on PATH, plus the nets `~/chess_engines/leela.pb.gz`
+and `maia-1100..1900.pb.gz`.
+
+### Dataset session (with a person at the board)
+
+```bash
+python3 ~/chess_ws/src/cocohrip/chess_game/tools/capture_dataset.py --lighting normal
+```
+
+The window says what to do ("Move the BLACK knight g8 -> f6"), shows the
+target position, and highlights the squares (red = take from, green = put on).
+Do it and take your hand away. When the board is still and changed exactly as
+asked, 3 photos are taken automatically. Resets (empty board, start position)
+wait for SPACE. Change the light and press `L` to switch the tag (normal ->
+dark -> bright). Aim for ~300 positions per lighting (~20-25 min each). `U`
+deletes and retakes wrong photos, and `--resume <dir>` continues a session.
+
+### Training and checking
+
+```bash
+~/chess_venv/bin/python ~/chess_ws/src/cocohrip/chess_game/tools/train_classifier.py \
+    "~/chess_dataset/*" --out ~/chess_models/latest          # ~ minutes on the RTX 2060
+python3 ~/chess_ws/src/cocohrip/chess_game/tools/eval_classifier.py \
+    ~/chess_models/latest/piece_classifier.onnx ~/chess_dataset/<session> --show
+```
+
+`eval_classifier` reports accuracy by lighting/exposure and whether every
+recorded game move is recognised from the classifier's probabilities.
+
+### Robot side without the robot
+
+`bash chess_game/tools/mock_robot/run.sh` starts the UR driver on mock
+hardware, MoveIt, a fake gripper and robot_control in an isolated ROS domain.
+It sends a capture plus castling and waits for `robot_move_done`.
+
+## Tests (no ROS, no camera)
+
+```bash
+cd chess_game && python3 -m pytest test -q    # needs: pip install chess pytest
+```
+`test_node_sim.py` plays random games through the node against a fake robot
+and a fake camera, in both colours.

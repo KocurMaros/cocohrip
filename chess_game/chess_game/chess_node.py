@@ -79,7 +79,7 @@ class ChessNode(Node):
     def __init__(self):
         super().__init__('chess_game')
         p = self.declare_parameter
-        p('engine', 'stockfish')            # stockfish | lc0:weights=... | builtin | random
+        p('engine', 'stockfish')            # stockfish | leela | maia | lc0:weights=... | builtin
         p('level', 3)                       # 1..5
         p('ai_time_limit', 2.0)
         p('model_path', '~/chess_models/latest/piece_classifier.onnx')
@@ -242,10 +242,12 @@ class ChessNode(Node):
         level = white_level(work, self.board_mask)
         if 140 <= level <= 235:
             return
-        old = self.camera.exposure_us
-        new = self.camera.set_exposure(old * float(np.clip(190.0 / max(level, 1.0), 0.5, 2.0)))
+        old = (self.camera.exposure_us, self.camera.gain_db)
+        self.camera.adjust(float(np.clip(190.0 / max(level, 1.0), 0.5, 2.0)))
+        new = (self.camera.exposure_us, self.camera.gain_db)
         if new != old:
-            print(f"[camera] lighting changed (white level {level:.0f}): exposure {old} -> {new} us")
+            print(f"[camera] lighting changed (white level {level:.0f}): exposure {old[0]} us "
+                  f"+{old[1]:.0f} dB -> {new[0]} us +{new[1]:.0f} dB")
             self.last_motion = time.time()      # re-read the board with the new exposure
 
     # ------------------------------------------------------------ keys
@@ -510,7 +512,7 @@ class ChessNode(Node):
         colour = "-" if not self.game.started else ("WHITE" if self.game.human_white else "BLACK")
         facts = [("you play", colour), ("engine", f"{self.engine.name} L{self.level}"),
                  ("promote to", chess.piece_name(self.game.promotion_piece)),
-                 ("exposure", f"{self.camera.exposure_us / 1000:.0f} ms"),
+                 ("exposure", f"{self.camera.exposure_us / 1000:.0f} ms +{self.camera.gain_db:.0f} dB"),
                  ("unsure sq.", len(unsure)), ("motion", f"{self.motion:.1f} %"),
                  ("control", "LOCKED (R)" if self.control_locked else "UNLOCKED"),
                  ("state", self.state.name.lower().replace("_", " "))]

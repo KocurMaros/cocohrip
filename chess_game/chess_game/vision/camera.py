@@ -14,6 +14,7 @@ import numpy as np
 
 EXPOSURE_MIN_US = 3000
 EXPOSURE_MAX_US = 250000
+GAIN_MAX_DB = 12.0            # used only when the exposure is at its maximum (dark room)
 
 # Image orientation for people: the human sits on the printed rank-1 side,
 # which is the right edge of the raw image -> rotate so it is at the bottom
@@ -62,6 +63,8 @@ class ChessCamera:
         self.cam.set_param("imgdataformat", "XI_RGB24")
         self.cam.set_param("auto_wb", 1)
         self.exposure_us = 0
+        self.gain_db = 0.0
+        self.set_gain(0.0)
         self.set_exposure(exposure_us)
         self.img = xiapi.Image()
         self.cam.start_acquisition()
@@ -105,8 +108,33 @@ class ChessCamera:
                 self.exposure_us = exposure_us
         return self.exposure_us
 
-    def auto_expose(self, measure=white_level, target=190.0, tol=0.08, max_iter=8):
-        """Scale the exposure until measure(frame) is near `target`."""
+    def set_gain(self, gain_db):
+        gain_db = float(np.clip(gain_db, 0.0, GAIN_MAX_DB))
+        with self._lock:
+            try:
+                self.cam.set_gain(gain_db)
+                self.gain_db = float(self.cam.get_gain())
+            except Exception:  # noqa: BLE001 - camera without gain control
+                self.gain_db = 0.0
+        return self.gain_db
+
+    def adjust(self, ratio):
+        """Brighten / darken by `ratio`: exposure first, gain only beyond the
+        longest exposure (and taken back first when darkening)."""
+        if ratio < 1.0 and self.gain_db > 0.0:
+            new_gain = self.gain_db + 20.0 * np.log10(ratio)
+            self.set_gain(max(new_gain, 0.0))
+            if new_gain >= 0.0:
+                return
+            ratio = 10 ** (new_gain / 20.0)
+        old = self.exposure_us
+        new = self.set_exposure(old * ratio)
+        if ratio > 1.0 and new >= EXPOSURE_MAX_US:
+            rest = ratio * old / max(new, 1)
+            self.set_gain(self.gain_db + 20.0 * np.log10(max(rest, 1.0)))
+
+    def auto_expose(self, measure=white_level, target=190.0, tol=0.08, max_iter=10):
+        """Exposure (then gain) until measure(frame) is near `target`."""
         level = 0.0
         for _ in range(max_iter):
             level = float(measure(self.grab_fresh()))
@@ -115,8 +143,9 @@ class ChessCamera:
             ratio = float(np.clip(target / max(level, 1.0), 0.35, 3.0))
             if level >= 250:
                 ratio = min(ratio, 0.6)
-            old = self.exposure_us
-            if self.set_exposure(old * ratio) == old:
+            before = (self.exposure_us, self.gain_db)
+            self.adjust(ratio)
+            if (self.exposure_us, self.gain_db) == before:
                 break                                   # at a limit
         return self.exposure_us, level
 
@@ -135,6 +164,7 @@ class ImageFolderCamera:
         self.paths = list(paths)
         self.i = 0
         self.exposure_us = exposure_us
+        self.gain_db = 0.0
         self.serial = "replay"
 
     def grab(self, timeout_ms=0):
@@ -150,6 +180,9 @@ class ImageFolderCamera:
     def set_exposure(self, exposure_us):
         self.exposure_us = int(np.clip(exposure_us, EXPOSURE_MIN_US, EXPOSURE_MAX_US))
         return self.exposure_us
+
+    def adjust(self, ratio):
+        self.set_exposure(self.exposure_us * ratio)
 
     def auto_expose(self, measure=white_level, **kw):
         return self.exposure_us, measure(self.grab())
