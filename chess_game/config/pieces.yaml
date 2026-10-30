@@ -1,0 +1,13 @@
+# Physical chess pieces: per piece type the height of the piece, the height
+# of the gripper fingertips (ur5e_robotiq_hande_end) above the board when
+# gripping, and the piece's width there - metres.
+# ESTIMATES from the camera image - replace with the measured values.
+pieces:
+  K: {height: 0.085, grip_height: 0.030, grip_width: 0.024}
+  Q: {height: 0.075, grip_height: 0.028, grip_width: 0.023}
+  B: {height: 0.065, grip_height: 0.025, grip_width: 0.021}
+  N: {height: 0.055, grip_height: 0.022, grip_width: 0.024}
+  R: {height: 0.050, grip_height: 0.022, grip_width: 0.024}
+  P: {height: 0.045, grip_height: 0.018, grip_width: 0.019}
+# clearance between the carried piece and the tallest piece on the board
+travel_margin: 0.025

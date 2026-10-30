@@ -231,3 +231,14 @@ def test_labels_rotate_for_black():
     labels = labels_for(chess.Board(), human_white=False)
     assert labels[chess.H8] == labels_for(chess.Board(), True)[chess.A1]
     assert np.count_nonzero(labels) == 32
+
+
+def test_move_pairs():
+    g = started()
+    for u in ("e2e4", "e7e5", "g1f3"):
+        g.push(chess.Move.from_uci(u))
+    assert g.move_pairs() == ["e4 e5", "Nf3"]
+    g = started("4k3/8/8/8/8/8/8/4K3 b - - 0 7")
+    g.push(chess.Move.from_uci("e8d8"))
+    g.push(chess.Move.from_uci("e1d1"))
+    assert g.move_pairs() == ["... Kd8", "Kd1"]

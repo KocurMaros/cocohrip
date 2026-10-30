@@ -23,5 +23,5 @@ setup(
     description='Chess against the UR5e: piece recognition, rules, swappable engines',
     license='Apache-2.0',
     tests_require=['pytest'],
-    entry_points={'console_scripts': []},
+    entry_points={'console_scripts': ['chess_node = chess_game.chess_node:main']},
 )

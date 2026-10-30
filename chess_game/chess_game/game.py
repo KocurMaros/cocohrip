@@ -228,6 +228,20 @@ class ChessGame:
         self.board.push(move)
         self.storage_used += sum(1 for s in steps if s.place.kind == "storage")
 
+    def move_pairs(self):
+        """The log as one line per move number: ["e4 e5", "Nf3 Nc6", ...]
+        ("... e5" when the game started with black to move)."""
+        lines = []
+        for entry in self.log:
+            num, san = entry.split(" ", 1)
+            if num.endswith("...") and lines and lines[-1][0] == num[:-3]:
+                lines[-1][1].append(san)
+            elif num.endswith("..."):
+                lines.append((num[:-3], ["...", san]))
+            else:
+                lines.append((num[:-1], [san]))
+        return [" ".join(sans) for _, sans in lines]
+
     def outcome(self):
         return self.board.outcome(claim_draw=True) if self.started else None
 

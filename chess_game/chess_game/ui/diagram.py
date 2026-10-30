@@ -18,9 +18,10 @@ def square_rect(sq, size, margin):
     return int(round(x0)), int(round(y0)), int(round(x0 + s)), int(round(y0 + s))
 
 
-def draw_diagram(placement, size=560, sources=(), targets=(), marks=(), title=None):
+def draw_diagram(placement, size=560, sources=(), targets=(), marks=(), title=None, promoted=()):
     """placement: {printed square: FEN symbol}.  sources / targets get a red /
-    green frame, marks (e.g. squares the camera disagrees on) a yellow dot."""
+    green frame, marks (e.g. squares the camera disagrees on) a yellow dot,
+    promoted pieces (a pawn on the board) a small orange "P" badge."""
     margin = 24
     img = np.full((size, size, 3), 50, np.uint8)
     s = (size - 2 * margin) / 8.0
@@ -45,6 +46,11 @@ def draw_diagram(placement, size=560, sources=(), targets=(), marks=(), title=No
     for sq in marks:
         x0, y0, x1, y1 = square_rect(sq, size, margin)
         cv2.circle(img, (x1 - 10, y0 + 10), 6, MARK_COLOUR, -1, cv2.LINE_AA)
+    for sq in promoted:
+        x0, y0, x1, y1 = square_rect(sq, size, margin)
+        cv2.rectangle(img, (x0 + 3, y1 - 19), (x0 + 19, y1 - 3), (0, 120, 255), -1)
+        cv2.putText(img, "P", (x0 + 6, y1 - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 255, 255), 1,
+                    cv2.LINE_AA)
     for i in range(8):
         x0, _, x1, _ = square_rect(i, size, margin)
         cv2.putText(img, "abcdefgh"[i], ((x0 + x1) // 2 - 5, size - 6), cv2.FONT_HERSHEY_SIMPLEX,

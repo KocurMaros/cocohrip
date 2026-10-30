@@ -44,15 +44,8 @@ from chess_game.dataset import (ChangeDetector, DatasetPlanner, Instruction,  # 
                                 check_change, label_record, placement_from_fen, read_labels)
 from chess_game.ui.diagram import draw_diagram  # noqa: E402
 from chess_game.vision.board_model import BoardModel, load_intrinsics  # noqa: E402
-from chess_game.vision.camera import (ImageFolderCamera, display_point, raw_point,  # noqa: E402
-                                      to_display, white_level)
-
-try:
-    from checkers_game.camera.board_geometry import find_board_corners, order_corners
-except ImportError:  # running from the source tree without the workspace sourced
-    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
-                                    "checkers_game"))
-    from checkers_game.camera.board_geometry import find_board_corners, order_corners
+from chess_game.vision.board_setup import click_corners, find_board_corners, locate  # noqa: E402
+from chess_game.vision.camera import ImageFolderCamera, to_display, white_level  # noqa: E402
 
 WIN = "Chess dataset"
 CALIB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "chess_game", "vision",
@@ -122,38 +115,17 @@ class Recorder:
         self.detector = ChangeDetector(self.model, self.work_shape, threshold=self.threshold)
 
     def detect_corners(self, work):
-        corners, msg = find_board_corners(work)
+        corners, self.a1_corner, msg = locate(work, self.a1_corner)
         print(f"[board] {msg}")
         return corners
 
     def manual_corners(self, work):
         """Click the outer corners of printed a1, a8, h8, h1."""
-        names = ["a1", "a8", "h8", "h1"]
-        clicks = []
-
-        def on_mouse(event, x, y, *_):
-            if event == cv2.EVENT_LBUTTONDOWN and len(clicks) < 4:
-                clicks.append(raw_point((x / self._disp_scale, y / self._disp_scale),
-                                        self.work_shape))
-        cv2.setMouseCallback(WIN, on_mouse)
-        while len(clicks) < 4:
-            disp = to_display(work.copy())
-            self._disp_scale = 900.0 / disp.shape[0]
-            disp = cv2.resize(disp, None, fx=self._disp_scale, fy=self._disp_scale)
-            for i, p in enumerate(clicks):
-                d = np.array(display_point(p, self.work_shape)) * self._disp_scale
-                cv2.circle(disp, tuple(int(v) for v in d), 6, (0, 0, 255), -1)
-            cv2.putText(disp, f"Click the outer corner of the squares at {names[len(clicks)]}",
-                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-            cv2.imshow(WIN, disp)
-            if cv2.waitKey(20) & 0xFF in (27, ord('q')):
-                return None
-        cv2.setMouseCallback(WIN, lambda *a: None)
-        ordered = order_corners(clicks)
-        # which image corner (BL, TL, TR, BR) did the user call a1?
-        a1 = np.asarray(clicks[0], np.float32)
-        self.a1_corner = ("BL", "TL", "TR", "BR")[int(np.argmin(np.linalg.norm(ordered - a1, axis=1)))]
-        return ordered
+        res = click_corners(WIN, work)
+        if res is None:
+            return None
+        corners, self.a1_corner = res
+        return corners
 
     # ------------------------------------------------------------ loop
     def run(self):
