@@ -17,8 +17,11 @@
   (fallback, tests, easy levels).
 * ``random`` - random legal move (tests).
 
-Anything else that speaks UCI works through UciEngine; a PyTorch policy
-network would be one more Engine subclass with the same choose_move().
+* ``uci:/path/to/engine`` - any other UCI engine (all of these get the
+  position and answer a move in the same UCI format).
+
+A PyTorch policy network would be one more Engine subclass with the same
+choose_move().
 """
 
 import os
@@ -308,6 +311,7 @@ def create_engine(spec="stockfish", fallback="builtin"):
 
     stockfish[:/path]            leela[:weights=/w.pb.gz]      maia[:net_dir=/dir]
     lc0[:weights=/w.pb.gz,command=/path/lc0,nodes=1]          builtin    random
+    uci:/path/to/any_uci_engine
     If a UCI engine cannot be started, `fallback` is used (None = raise)."""
     name, _, arg = spec.partition(":")
     kwargs = {}
@@ -324,6 +328,9 @@ def create_engine(spec="stockfish", fallback="builtin"):
             return leela(kwargs.get("command"), kwargs.get("weights"))
         if name == "maia":
             return maia(kwargs.get("command"), kwargs.get("net_dir"))
+        if name == "uci":                     # any other UCI engine binary
+            return UciEngine(os.path.expanduser(kwargs["command"]),
+                             name=os.path.basename(kwargs["command"]))
         if name == "builtin":
             return BuiltinEngine()
         if name == "random":

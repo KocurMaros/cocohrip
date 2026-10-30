@@ -40,6 +40,7 @@ def test_random_and_factory_fallback():
     assert isinstance(eng, BuiltinEngine)
     assert isinstance(create_engine("maia:net_dir=/nonexistent"), BuiltinEngine)
     assert isinstance(create_engine("leela:command=/nonexistent/lc0"), BuiltinEngine)
+    assert isinstance(create_engine("uci:/nonexistent/engine"), BuiltinEngine)
     with pytest.raises(ValueError):
         create_engine("nonsense")
 
