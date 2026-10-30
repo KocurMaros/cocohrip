@@ -4,6 +4,9 @@ capture_dataset.py and export it to ONNX.
 
     python3 train_classifier.py ~/chess_dataset/2026* --out ~/chess_models/v1
     python3 train_classifier.py ... --arch mobilenet_v3_large --epochs 30
+    # new piece set: fine-tune the existing model on a short session
+    python3 train_classifier.py ~/chess_dataset/<new set>* --init ~/chess_models/latest/piece_classifier.pt \
+        --lr 1e-4 --epochs 10 --out ~/chess_models/<new set>
 
 Needs PyTorch + torchvision (a GPU makes it ~20x faster); everything else
 is the chess_game package.  Labels come for free: every photo has the FEN of
@@ -250,6 +253,8 @@ def main():
     ap.add_argument("--photos-per-batch", type=int, default=6)
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--workers", type=int, default=6)
+    ap.add_argument("--init", help="start from this piece_classifier.pt (fine-tuning, e.g. a "
+                                   "new piece set - use a lower --lr such as 1e-4)")
     ap.add_argument("--max-photos", type=int, help="use at most N photos (quick tests)")
     ap.add_argument("--val-block", type=int, default=25,
                     help="every 5th block of this many consecutive positions is validation")
@@ -275,7 +280,11 @@ def main():
     weights /= weights.mean()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = build_model(args.arch).to(device)
+    model = build_model(args.arch)
+    if args.init:
+        model.load_state_dict(torch.load(os.path.expanduser(args.init), map_location="cpu"))
+        print(f"fine-tuning from {args.init}")
+    model = model.to(device)
     train_dl = torch.utils.data.DataLoader(PhotoSquares(train_recs, True), args.photos_per_batch,
                                            shuffle=True, num_workers=args.workers, collate_fn=collate,
                                            persistent_workers=args.workers > 0, drop_last=True)

@@ -9,12 +9,19 @@ Uses the running move_group (Cartesian paths, 5-10 % speed) and the
 gripper_service of the normal bringup; no robot_control commands.
 
 Board: clear it, put one piece of each type on the squares in PIECES.
-H8 / A1 must match robot_control's board_h8_xy / board_a1_xy.
+The board corners (board_h8_xy / board_a1_xy) are read from the running
+robot_control_node (fallback: the values below).
 
     python3 measure_pieces.py check              # no motion: services, targets
     python3 measure_pieces.py hover c3           # 15 cm above a square
     python3 measure_pieces.py measure [squares]  # -> ~/chess_piece_measure.json
     python3 measure_pieces.py lift [squares]     # grip at the chosen height, lift 3 cm
+    python3 measure_pieces.py yaml [out.yaml]    # no robot: pieces.yaml from the scan
+
+`yaml` picks for every piece the lowest scanned fingertip height that keeps
+the gripper body GRIP_CLEARANCE above the piece's top (and >= 15 mm), and
+the width measured there.  Lift-test the result (`lift` uses the heights in
+LIFT_GRIPS - edit them) before using it for games.
 """
 import json
 import os
@@ -33,8 +40,10 @@ import tf2_ros
 QUAT = (-0.0028119066264480352, 0.9999957084655762, -0.0007648332393728197, -0.00023792324645910412)
 EE = "ur5e_robotiq_hande_end"
 FRAME = "world"
-H8 = (1.1099, 0.4478)
-A1 = (0.7191, 0.0458)
+H8 = [1.1099, 0.4478]
+A1 = [0.7191, 0.0458]
+HANDE_BODY = 0.0465          # gripper body above the fingertips [m]
+GRIP_CLEARANCE = 0.010       # body above the piece's top when gripping [m]
 SAFE_Z = 0.20
 START_Z = 0.075
 STEP = 0.005
@@ -42,6 +51,8 @@ BODY_MARGIN = 0.031          # scan at most this far below the first contact (gr
 MIN_Z = 0.008
 PIECES = {"c3": "K", "e3": "Q", "g3": "R", "c5": "B", "e5": "N", "g5": "P"}
 OUT = os.path.expanduser("~/chess_piece_measure.json")
+# grip heights tried by `lift` (the cell's wooden set, 2026-10-30)
+LIFT_GRIPS = {"c3": 0.030, "e3": 0.020, "g3": 0.015, "c5": 0.015, "e5": 0.012, "g5": 0.015}
 
 
 def square_xy(name):
@@ -116,9 +127,47 @@ class M(Node):
         return r.final_position, r.object_status
 
 
+def pieces_yaml(results, margin=0.025):
+    """pieces.yaml text from a measurement (see the module doc)."""
+    lines = ["# measured with tools/measure_pieces.py - lift-test before use", "pieces:"]
+    for sym in "KQBNRP":
+        r = results.get(sym)
+        if not r or r["first_contact_z"] is None:
+            lines.append(f"  # {sym}: not measured")
+            continue
+        top = r["first_contact_z"] + STEP
+        low = max(top - HANDE_BODY + GRIP_CLEARANCE, 0.015)
+        cand = [lv for lv in r["levels"] if lv[3] is not None and lv[0] >= low - 1e-6]
+        z, _, _, width = min(cand, key=lambda lv: lv[0])
+        lines.append(f"  {sym}: {{height: {top:.3f}, grip_height: {z:.3f}, grip_width: {width / 1000:.4f}}}")
+    lines.append(f"travel_margin: {margin}")
+    return "\n".join(lines) + "\n"
+
+
+def board_from_robot_control(node):
+    """board_h8_xy / board_a1_xy of the running robot_control_node."""
+    from rcl_interfaces.srv import GetParameters
+    cli = node.create_client(GetParameters, "/robot_control_node/get_parameters")
+    if not cli.wait_for_service(timeout_sec=3):
+        print("robot_control_node not found - using the default board corners")
+        return
+    res = node.wait(cli.call_async(GetParameters.Request(names=["board_h8_xy", "board_a1_xy"])))
+    h8, a1 = (list(v.double_array_value) for v in res.values)
+    if len(h8) == 2 and len(a1) == 2:
+        H8[:], A1[:] = h8, a1
+        print(f"board from robot_control: H8 {H8}, A1 {A1}")
+
+
 def main():
+    if sys.argv[1] == "yaml":
+        text = pieces_yaml(json.load(open(OUT)))
+        if len(sys.argv) > 2:
+            open(sys.argv[2], "w").write(text)
+        print(text)
+        return
     rclpy.init()
     n = M()
+    board_from_robot_control(n)
     for c, name in ((n.cart, "cartesian"), (n.grip, "gripper")):
         if not c.wait_for_service(timeout_sec=5):
             sys.exit(f"no {name} service")
@@ -132,10 +181,9 @@ def main():
             print(sq, ["%.4f" % v for v in square_xy(sq)])
         return
     if mode == "lift":
-        grips = {"c3": 0.030, "e3": 0.020, "g3": 0.015, "c5": 0.015, "e5": 0.012, "g5": 0.015}
-        for sq in sys.argv[2:] or list(grips):
+        for sq in sys.argv[2:] or list(LIFT_GRIPS):
             x, y = square_xy(sq)
-            z = grips[sq]
+            z = LIFT_GRIPS[sq]
             p = n.pose()
             n.move([(p.x, p.y, max(p.z, SAFE_Z)), (x, y, SAFE_Z), (x, y, START_Z)])
             n.gripper(0, 5)

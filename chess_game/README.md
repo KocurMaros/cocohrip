@@ -6,12 +6,41 @@ Branch `feat/chess`. On the robot PC it lives in its own workspace,
 | Part | State |
 |---|---|
 | rules, move recognition, robot pick/place plans (`game.py`) | done, unit tested |
-| engines: Stockfish / Leela / Maia / builtin (`engines.py`) | Stockfish installed; Leela/Maia need the `lc0` binary |
+| engines: Stockfish / Leela / Maia / any UCI (`engines.py`) | done; installed on the robot PC |
 | ROS node + dashboard (`chess_node.py`) | done, simulated games pass; not run on the cell yet |
 | robot_control executor (`/chess/robot_move`) | done, verified on mock hardware |
+| piece sizes (`config/pieces.yaml`) | measured with the gripper, lift-tested |
 | piece classifier (`vision/classifier.py`, `tools/train_classifier.py`) | pipeline verified on the robot PC GPU; **needs the dataset** |
 | dataset recorder (`tools/capture_dataset.py`) | ready, waiting for the recording session |
-| piece sizes (`config/pieces.yaml`) | **estimates**, to be measured with the gripper |
+
+### Still to do for a stable version
+
+1. Record the dataset (dark / normal / bright), train, check with
+   `eval_classifier` (target: >= 99.5 % of moves recognised).
+2. First robot moves on the cell: squares, storage slots left/right of the
+   board (free, reachable), place accuracy, travel height.
+3. Full games on the cell: captures, castling, en passant, promotion marker,
+   wrong-move feedback, hand detection, lighting changes, grip failures.
+4. Piece centring from the camera (`PickPlace.offset_*` is 0 so far).
+5. Turn the gripper by the direction the knight's head faces.
+6. Check the robot_move_done fix (`9c2e372`) with checkers too, then merge to main.
+
+Optional: lc0 on the GPU (stronger Leela nets), take-back key, saving games as PGN.
+
+## Install (not in git)
+
+```bash
+bash ~/chess_ws/src/cocohrip/chess_game/tools/install.sh          # add --venv for training
+```
+
+This installs python-chess (pip), Stockfish (apt), builds lc0 into
+`~/chess_engines`, downloads the Maia 1100-1900 and Leela nets, and (with
+`--venv`) creates the PyTorch training venv `~/chess_venv`. Steps that are
+already done are skipped, and it finishes by testing the three engines.
+Without Stockfish the node falls back to the built-in engine. Datasets
+(`~/chess_dataset`) and models (`~/chess_models`) are not in git either.
+
+Another chess set: see [docs/NEW_PIECE_SET.md](docs/NEW_PIECE_SET.md).
 
 ## The camera
 
@@ -43,6 +72,8 @@ behind them. The human sits on the printed rank-1 side, the robot on rank 8.
 * **Promotion**: there are no spare pieces. The pawn stays a pawn on the
   board and becomes a queen in the game (P cycles Q/R/B/N for your pawns); the
   dashboard marks it with an orange "P", and the robot grips it as a pawn.
+* **Engines**: Torch (Chess.com) is not available outside Chess.com.
+  AlphaZero was never released; Leela is its open re-implementation.
 * **Captures**: the robot takes your captured pieces to storage, one column of
   8 slots left of the board, then one right of it (as in checkers). You take
   the robot's pieces off yourself.
@@ -55,13 +86,12 @@ cd ~/chess_ws && colcon build
 # run: robot bringup + robot_control from ~/chess_ws as for checkers, then
 source ~/chess_ws/install/setup.bash
 ros2 launch chess_game chess_game_launch.py engine:=stockfish level:=3
-#   engine: stockfish | leela | maia (level 1..5 = Maia 1100..1900) | builtin
+#   engine: stockfish | leela | maia | lc0:weights=... | uci:/path/to/engine | builtin
 ```
 
-Python on the robot PC: `python-chess` (pip, user), `stockfish` (apt),
-training venv `~/chess_venv` (PyTorch + CUDA). Leela / Maia need `lc0` in
-`~/chess_engines/` or on PATH, plus the nets `~/chess_engines/leela.pb.gz`
-and `maia-1100..1900.pb.gz`.
+`level` 1..5: Stockfish skill, Leela search size, Maia rating 1100..1900.
+`colour_only:=true` uses the classifier for empty / white / black only (a set
+it was not trained on), and `pieces_yaml:=` selects another set's sizes.
 
 ### Dataset session (with a person at the board)
 

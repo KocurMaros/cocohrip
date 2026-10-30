@@ -24,7 +24,7 @@ class PieceSpec:
 
 def load_pieces(path=None):
     """{'K': PieceSpec, ...} and the travel margin from a pieces.yaml."""
-    path = path or _find_pieces_yaml()
+    path = os.path.expanduser(path) if path else _find_pieces_yaml()
     with open(path) as f:
         data = yaml.safe_load(f)
     specs = {k.upper(): PieceSpec(float(v["height"]), float(v["grip_height"]), float(v["grip_width"]))

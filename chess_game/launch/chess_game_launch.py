@@ -12,6 +12,9 @@ def generate_launch_description():
         DeclareLaunchArgument('level', default_value='3'),
         DeclareLaunchArgument('model_path',
                               default_value='~/chess_models/latest/piece_classifier.onnx'),
+        DeclareLaunchArgument('colour_only', default_value='false'),
+        # '' = share/chess_game/config/pieces.yaml (the cell's wooden set)
+        DeclareLaunchArgument('pieces_yaml', default_value=''),
     ]
     return LaunchDescription(args + [
         Node(
@@ -23,9 +26,11 @@ def generate_launch_description():
                 'engine': LaunchConfiguration('engine'),
                 'level': ParameterValue(LaunchConfiguration('level'), value_type=int),
                 'model_path': LaunchConfiguration('model_path'),
+                # True: classifier used for empty / white / black only (new piece set)
+                'colour_only': ParameterValue(LaunchConfiguration('colour_only'), value_type=bool),
+                'pieces_yaml': ParameterValue(LaunchConfiguration('pieces_yaml'), value_type=str),
                 'ai_time_limit': 2.0,     # s per robot move
                 'stable_time': 0.8,       # s the board must be still before it is read
-                'pieces_yaml': '',        # '' = share/chess_game/config/pieces.yaml
                 # storage for captured pieces: one column left, one right of the board
                 'storage_left_col': -1.8,
                 'storage_right_col': 8.8,

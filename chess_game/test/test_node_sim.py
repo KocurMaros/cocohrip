@@ -122,7 +122,7 @@ class World:
         return o
 
 
-def run_game(monkeypatch, seed, human_white, engine="random", max_plies=80, robot_fails=False):
+def run_game(monkeypatch, seed, human_white, engine="random", max_plies=80, colour_only=False):
     install_stubs(monkeypatch)
     import cv2
     for mod in [m for m in sys.modules if m.startswith("chess_game.chess_node")]:
@@ -175,6 +175,7 @@ def run_game(monkeypatch, seed, human_white, engine="random", max_plies=80, robo
     node = chess_node.ChessNode()
     node._params = None
     node.stable_time = 0.0
+    node.colour_only = colour_only
     node.engine = chess_node.create_engine(engine)
     node.engine.rng = random.Random(seed) if hasattr(node.engine, "rng") else None
 
@@ -268,3 +269,9 @@ def test_random_games_stay_in_sync(monkeypatch, seed, human_white):
 def test_robot_first_when_human_plays_black(monkeypatch):
     node, world, _ = run_game(monkeypatch, 7, False, max_plies=2)
     assert node.game.log[0].startswith("1. ")      # white = robot moved first
+
+
+def test_colour_only_mode_still_follows_the_game(monkeypatch):
+    node, world, _ = run_game(monkeypatch, 11, True, colour_only=True)
+    assert node.obs.shape == (64, 3)
+    assert len(node.game.board.move_stack) > 10

@@ -44,7 +44,7 @@ from chess_msgs.msg import ChessRobotMove, ChessState, PickPlace
 
 from chess_game.engines import create_engine
 from chess_game.frames import OffBoardLayout, logical_to_printed
-from chess_game.game import CLASSES, ChessGame
+from chess_game.game import CLASSES, COLOURS, ChessGame, collapse_to_colour
 from chess_game.robot_steps import load_pieces, robot_geometry
 from chess_game.ui.diagram import draw_diagram
 from chess_game.vision import board_setup
@@ -87,6 +87,11 @@ class ChessNode(Node):
         p('stable_time', 0.8)
         p('motion_threshold', 1.0)          # % changed pixels that count as motion
         p('a1_corner', 'BR')                # raw image corner of printed a1
+        # True: use only empty / white / black from the classifier (e.g. a new
+        # piece set the model was not trained on); every legal move is still
+        # recognised, but F (start from a position) and the setup's piece
+        # types are not available
+        p('colour_only', False)
         p('storage_left_col', -1.8)
         p('storage_right_col', 8.8)
         p('storage_rows', 8)
@@ -131,6 +136,9 @@ class ChessNode(Node):
         self.engine = create_engine(g('engine').value)
         print(f"Engine: {self.engine.name}, level {self.level}")
 
+        self.colour_only = bool(g('colour_only').value)
+        if self.colour_only:
+            print("Colour-only mode: piece types are ignored")
         self.game = ChessGame()
         self.human_white_for_f = True
         self.state = State.WAITING_FOR_START
@@ -216,6 +224,8 @@ class ChessNode(Node):
                 self.obs_time < self.last_motion or self.force_check):
             self.force_check = False
             self.obs = self.classifier.classify(work, self.model)
+            if self.colour_only:
+                self.obs = collapse_to_colour(self.obs)
             self.obs_time = time.time()
             new_obs = True
 
@@ -488,7 +498,10 @@ class ChessNode(Node):
             return {}, []
         pred = self.obs.argmax(axis=1)
         conf = self.obs.max(axis=1)
-        placement = {s: CLASSES[c] for s, c in enumerate(pred) if c}
+        if self.obs.shape[1] == len(COLOURS):       # colour only: show pawns
+            placement = {s: "P" if c == 1 else "p" for s, c in enumerate(pred) if c}
+        else:
+            placement = {s: CLASSES[c] for s, c in enumerate(pred) if c}
         unsure = [s for s in range(64) if conf[s] < 0.6]
         return placement, unsure
 

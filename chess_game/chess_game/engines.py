@@ -27,6 +27,7 @@ choose_move().
 import os
 import random
 import shutil
+import subprocess
 import time
 
 import chess
@@ -72,7 +73,8 @@ class UciEngine(Engine):
     def __init__(self, command, options=None, level_options=None, level_limits=None,
                  name="uci"):
         self.name = name
-        self.engine = chess.engine.SimpleEngine.popen_uci(command)
+        # the engine's own log (lc0's banner, ...) is not needed on the console
+        self.engine = chess.engine.SimpleEngine.popen_uci(command, stderr=subprocess.DEVNULL)
         if options:
             self.engine.configure(options)
         self.level_options = level_options or {}
