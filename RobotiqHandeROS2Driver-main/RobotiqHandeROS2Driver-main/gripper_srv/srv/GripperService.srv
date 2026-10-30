@@ -1,6 +1,11 @@
 # 1 to open gripper and 0 to close gripper
-int32 position 
+int32 position
 int32 speed
 int32 force
 ---
 string response
+# Finger position reached (0 open .. 255 closed) and how the move ended:
+# 1 stopped opening on an object, 2 stopped closing on an object (gripped),
+# 3 reached the position without contact; -1 = error / timeout
+int32 final_position
+int32 object_status

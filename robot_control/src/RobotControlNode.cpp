@@ -1,5 +1,6 @@
 #include "robot_control/RobotControlNode.hpp"
 #include "robot_control/RobotPoseUtility.hpp"
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -90,7 +91,16 @@ RobotControlNode::RobotControlNode()
     zAttach = this->declare_parameter<double>("z_attach", 0.160 - kHandeFlangeToTcp);
     zMoving = 0.20 - kHandeFlangeToTcp;           // was: raised to 20cm to avoid hitting pieces
     zSafeTransition = 0.25 - kHandeFlangeToTcp;   // was: safe transition height between squares
-    
+
+    // Adaptive grip: close up to grip_extra_mm (max 20 mm) past the old fixed
+    // position; the Hand-E stops on the piece, reaching the target = a miss
+    const auto closePos = this->declare_parameter<int64_t>("gripper_close_position", 111);
+    const double extraMm = std::clamp(this->declare_parameter<double>("grip_extra_mm", 10.0), 0.0, 20.0);
+    gripCloseTarget = std::clamp(static_cast<int>(closePos + std::lround(extraMm * kHandeCountsPerMm)), 0, 255);
+    gripForce = std::clamp(static_cast<int>(this->declare_parameter<int64_t>("grip_force", 20)), 1, 255);
+    gripRetries = std::max(0, static_cast<int>(this->declare_parameter<int64_t>("grip_retries", 1)));
+    pickOffsetMax = std::clamp(this->declare_parameter<double>("pick_offset_max", 0.012), 0.0, 0.015);
+
     RCLCPP_INFO(this->get_logger(), "Board calibration:");
     RCLCPP_INFO(this->get_logger(), "  Calculated square size: %.4f m", square_size);
     RCLCPP_INFO(this->get_logger(), "  Board offset X: %.4f m", boardOffsetX);
@@ -102,6 +112,9 @@ RobotControlNode::RobotControlNode()
     }
     RCLCPP_INFO(this->get_logger(), "  Z attach height: %.4f m", zAttach);
     RCLCPP_INFO(this->get_logger(), "  Z moving height: %.4f m", zMoving);
+    RCLCPP_INFO(this->get_logger(), "Grip: close to %d (%.1f mm past %ld), force %d, %d retries, "
+                "centring <= %.1f mm", gripCloseTarget, extraMm, static_cast<long>(closePos), gripForce,
+                gripRetries, pickOffsetMax * 1000.0);
 }
 
 RobotControlNode::~RobotControlNode() {
@@ -143,13 +156,79 @@ void RobotControlNode::openGripper() {
 }
 
 void RobotControlNode::closeGripper() {
-    RCLCPP_INFO(this->get_logger(), "Closing gripper");
+    const int attempt = ++gripAttempts;
+    RCLCPP_INFO(this->get_logger(), "Closing gripper to %d (attempt %d)", gripCloseTarget, attempt);
     auto request = std::make_shared<gripper_srv::srv::GripperService::Request>();
-    request->position = 111;
+    request->position = gripCloseTarget;
     request->speed = 10;  // Faster gripper speed
-    request->force = 5;
-    auto result = gripperServiceClient->async_send_request(request);
-    // std::this_thread::sleep_for(std::chrono::milliseconds(1500));  // Reduced from 3s to 1.5s
+    request->force = gripForce;
+    gripPending = true;
+    gripRequestTime = std::chrono::steady_clock::now();
+    // the answer arrives on the executor thread, like mainLoop() - no locking needed
+    gripperServiceClient->async_send_request(request,
+        [this, attempt](rclcpp::Client<gripper_srv::srv::GripperService>::SharedFuture future) {
+            auto response = future.get();
+            onGripResult(attempt, response->final_position, response->object_status);
+        });
+}
+
+void RobotControlNode::onGripResult(int attempt, int finalPosition, int objectStatus) {
+    if (!gripPending || attempt != gripAttempts) {
+        return;  // late answer to a timed-out request
+    }
+    gripPending = false;
+    if (target_pose_index < 0 || static_cast<std::size_t>(target_pose_index) >= targetPositions.size()) {
+        gripAttempts = 0;  // the move was aborted meanwhile
+        doingTask = false;
+        return;
+    }
+    if (objectStatus == kGripStatusGripped) {
+        RCLCPP_INFO(this->get_logger(), "✅ Piece gripped: fingers stopped at %d (~%.1f mm apart)",
+                    finalPosition, 50.0 - finalPosition / kHandeCountsPerMm);
+        gripAttempts = 0;
+        targetPositions[target_pose_index].task = Task::NONE;
+        trajectory_list[trajectory_pose_index].second = Task::NONE;
+        doingTask = false;
+        return;
+    }
+    RCLCPP_WARN(this->get_logger(), "❌ Piece NOT gripped (position %d, status %d) - attempt %d of %d",
+                finalPosition, objectStatus, attempt, gripRetries + 1);
+    openGripper();
+    if (attempt <= gripRetries) {
+        doingTask = false;  // task is still ATTACH: mainLoop() closes again
+        return;
+    }
+    giveUpPick();
+}
+
+void RobotControlNode::giveUpPick() {
+    const Mission mission = targetPositions[target_pose_index];
+    // mission (row, col) = rotate90DegreesCounterClockwise(r, c) = (c, 7 - r)
+    pickFailedRow = 7 - mission.col;
+    pickFailedCol = mission.row;
+    pickFailed.store(true);
+    RCLCPP_ERROR(this->get_logger(), "Giving up this move: could not grip the piece on game square (%d, %d)",
+                 pickFailedRow, pickFailedCol);
+    removePiece();
+    createFakePieceWithColor("piece" + std::to_string(mission.row) + std::to_string(mission.col),
+                             mission.row, mission.col, mission.color);
+    chessBoardPub->publish(marker_array_fake_pieces);
+    // drop the remaining pick/place pairs: mainLoop() finishes this trajectory
+    // and goes HOME, which reports the failure (publishMoveDone)
+    targetPositions.erase(targetPositions.begin() + target_pose_index + 1, targetPositions.end());
+    targetPositions[target_pose_index].task = Task::NONE;
+    trajectory_pose_index = static_cast<int>(trajectory_list.size());
+    gripAttempts = 0;
+    doingTask = false;
+}
+
+void RobotControlNode::publishMoveDone() {
+    auto message = checkers_msgs::msg::RobotMove();
+    message.robot_move_done = true;
+    message.pick_failed = pickFailed.exchange(false);
+    message.pick_row = pickFailedRow;
+    message.pick_col = pickFailedCol;
+    robotMovePub->publish(message);
 }
 
 bool RobotControlNode::moveToSafeApproachPosition() {
@@ -222,7 +301,12 @@ bool RobotControlNode::moveToSafeApproachPosition() {
 
 void RobotControlNode::mainLoop() {
     getPose();
-    
+
+    if (gripPending && std::chrono::steady_clock::now() - gripRequestTime > std::chrono::seconds(8)) {
+        RCLCPP_ERROR(this->get_logger(), "No answer from the gripper - counting it as a failed grip");
+        onGripResult(gripAttempts, -1, -1);
+    }
+
     if(isStop.load() || isRobotMoving.load()) {
         return;
     }
@@ -345,6 +429,9 @@ void RobotControlNode::mainLoop() {
                        task == Task::ATTACH ? "CLOSE (pick)" : "OPEN (place)");
             Mission mission = targetPositions[target_pose_index];
             makeTask(mission);
+            if (doingTask) {
+                return;  // pick: onGripResult() decides how to go on
+            }
             // Wait for gripper operation to complete
             std::this_thread::sleep_for(std::chrono::milliseconds(1500));
         }
@@ -540,9 +627,7 @@ void RobotControlNode::mainLoop() {
                     
                     RCLCPP_INFO(this->get_logger(), "✅ All tasks complete! Robot at HOME");
                     
-                    auto message = checkers_msgs::msg::RobotMove();
-                    message.robot_move_done = true;
-                    robotMovePub->publish(message);
+                    publishMoveDone();
                 }
             });
         }
@@ -561,10 +646,13 @@ void RobotControlNode::makeTask(Mission mission) {
     std::string pieceID = "piece" + std::to_string(row) + std::to_string(col);
 
     if(task == Task::ATTACH) {
-        removeFakePiece(pieceID);
-        createPiece(row, col);
+        if (gripAttempts == 0) {
+            removeFakePiece(pieceID);
+            createPiece(row, col);
+        }
         // attachPiece();
         closeGripper();
+        return;  // doingTask stays true until onGripResult()
     }
     else {
         // detachPiece();
@@ -759,9 +847,7 @@ void RobotControlNode::continue_move() {
                 
                 RCLCPP_INFO(this->get_logger(), "✅ All tasks complete! Robot at HOME");
                 
-                auto message = checkers_msgs::msg::RobotMove();
-                message.robot_move_done = true;
-                robotMovePub->publish(message);
+                publishMoveDone();
             });
         } else {
             // Resume fake HOME (just lift position)
@@ -793,9 +879,7 @@ void RobotControlNode::continue_move() {
                 // Only report the move as done when no pick/place pairs remain
                 if (targetPositions.empty() || target_pose_index < 0 ||
                     static_cast<std::size_t>(target_pose_index) >= targetPositions.size()) {
-                    auto message = checkers_msgs::msg::RobotMove();
-                    message.robot_move_done = true;
-                    robotMovePub->publish(message);
+                    publishMoveDone();
                 }
                 
                 // Prepare next trajectory if available
@@ -859,9 +943,7 @@ void RobotControlNode::ros_out_callback(const rcl_interfaces::msg::Log::SharedPt
                 if (!isFinalHome.load() &&
                     (targetPositions.empty() || target_pose_index < 0 ||
                      static_cast<std::size_t>(target_pose_index) >= targetPositions.size())) {
-                    auto message = checkers_msgs::msg::RobotMove();
-                    message.robot_move_done = true;
-                    robotMovePub->publish(message);
+                    publishMoveDone();
                 }
                 
                 // If there are more missions, prepare next trajectory
@@ -971,6 +1053,8 @@ void RobotControlNode::abortAndClearMovement() {
     isRobotSendingHome.store(false);
     isFinalHome.store(false);
     doingTask = false;
+    gripPending = false;
+    gripAttempts = 0;
     abortCurrentMovement.store(false);
     
     RCLCPP_INFO(this->get_logger(), "✅ Previous movement aborted, ready for new command");
@@ -1043,11 +1127,13 @@ void RobotControlNode::checkers_move_callback(const checkers_msgs::msg::Move::Sh
                    "Storing removed piece from board[%d, %d] to storage slot %d (%.4f, %.4f)", 
                    row, col, slot, storeX, storeY);
 
-        targetPositions.push_back(Mission(row, col, whiteColorString, Task::ATTACH));
+        targetPositions.push_back(Mission(row, col, whiteColorString, Task::ATTACH,
+                                          piece.offset_row, piece.offset_col));
         targetPositions.push_back(Mission(storage_row, storage_col, whiteColorString, Task::DETACH));
     }
-    
-    targetPositions.push_back(Mission(startRow, startCol, redColorString, Task::ATTACH));
+
+    targetPositions.push_back(Mission(startRow, startCol, redColorString, Task::ATTACH,
+                                      msg->piece_for_moving.offset_row, msg->piece_for_moving.offset_col));
     targetPositions.push_back(Mission(targetRow, targetCol, redColorString, Task::DETACH));
 
     // Prepare first trajectory
@@ -1100,7 +1186,24 @@ std::vector<std::pair<geometry_msgs::msg::Pose, Task>> RobotControlNode::getPose
     auto [targetX, targetY] = missionToXY(mission.row, mission.col);
     float posX = static_cast<float>(targetX);
     float posY = static_cast<float>(targetY);
-    
+
+    // Pick: centre the gripper on the piece as the camera saw it (offset in
+    // game squares -> robot XY, same axes as missionToXY), at most pick_offset_max
+    if (mission.task == Task::ATTACH && mission.row < STORAGE_ROW_BASE) {
+        double ox = mission.offsetRow * urX + mission.offsetCol * ucX;
+        double oy = mission.offsetRow * urY + mission.offsetCol * ucY;
+        const double len = std::hypot(ox, oy);
+        if (len > pickOffsetMax) {
+            ox *= pickOffsetMax / len;
+            oy *= pickOffsetMax / len;
+        }
+        posX += static_cast<float>(ox);
+        posY += static_cast<float>(oy);
+        RCLCPP_INFO(this->get_logger(), "Pick centring: X %+.1f, Y %+.1f mm (camera: %+.1f mm along "
+                    "rows, %+.1f mm along cols)", ox * 1000.0, oy * 1000.0,
+                    mission.offsetRow * square_size * 1000.0, mission.offsetCol * square_size * 1000.0);
+    }
+
     // SAFETY CHECK: the target must lie on the board or the storage area
     // next to it: within 8 squares of the board centre (board corner squares
     // are ~5 squares away, storage slots ~7.3)

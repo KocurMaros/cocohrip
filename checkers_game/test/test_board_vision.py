@@ -152,3 +152,41 @@ def test_change_scores_ignore_global_lighting():
     nb, _, _ = bv.normalise(bv.to_gray(b), 1)
     z, raw = bv.change_scores(na, nb)
     assert z.max() < 3.0
+
+
+# board corners in the real camera image: the far edge is ~28 % shorter
+REAL_CORNERS = np.array([[119, 541], [50, 84], [497, 41], [507, 536]], np.float32)
+
+# camera poses (k, nadir, rotate_k): a piece top shows up k * (position - nadir) px off
+# its foot (board px, 1 px ~ 0.6 mm; 8 mm pieces: k 0.012 ~ camera 0.7 m up, 0.027 ~ 0.3 m)
+CAMERA_POSES = [(0.012, (400, 2000), 0), (0.012, (400, -1300), 1), (0.014, (-1500, 400), 3),
+                (0.014, (-900, -900), 3), (0.027, (400, 1100), 0), (0.01, (400, 400), 1)]
+
+
+def _scene(start, k, nadir, feet):
+    tops = {}
+    for (r, c), (fx, fy) in feet.items():
+        x, y = c * bv.CELL + bv.CELL // 2 + fx, r * bv.CELL + bv.CELL // 2 + fy
+        tops[(r, c)] = (round(fx + k * (x - nadir[0])), round(fy + k * (y - nadir[1])))
+    return sb.render_topdown(start, centres=tops, feet=feet)
+
+
+@pytest.mark.parametrize("corners", [None, REAL_CORNERS])
+@pytest.mark.parametrize("k, nadir, rotate_k", CAMERA_POSES)
+def test_piece_offset_measures_pushed_piece(k, nadir, rotate_k, corners):
+    """A pushed piece is measured to a few px (1 px ~ 0.6 mm) from any camera pose."""
+    rng = np.random.RandomState(rotate_k)
+    start = GameState.initial(1).to_grid()
+    if corners is None:
+        corners = sb.random_corners(rng)
+    centred = {(r, c): (0, 0) for r in range(8) for c in range(8)}
+
+    def shot(feet):
+        return sb.to_camera(_scene(start, k, nadir, feet), corners, rotate_k=rotate_k, rng=rng)
+
+    det = make_detector(shot(centred), corners)
+    det.learn_piece_centres(shot(centred), start)
+    for (r, c), push in {(5, 0): (12, 10), (2, 3): (-14, 5), (6, 5): (0, -15),
+                         (0, 7): (10, -8)}.items():
+        off_row, off_col = det.piece_offset(shot({**centred, (r, c): push}), r, c)
+        assert abs(off_col * bv.CELL - push[0]) <= 5 and abs(off_row * bv.CELL - push[1]) <= 5

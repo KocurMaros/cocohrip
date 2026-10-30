@@ -14,7 +14,8 @@ CELL = 100
 
 
 def render_topdown(grid, parity=1, black_piece_level=38, dark_level=22,
-                   light_level=205, white_piece_level=215, rng=None):
+                   light_level=205, white_piece_level=215, rng=None, centres=None, feet=None):
+    """Top-down board; centres / feet = {(r, c): (dx, dy)} piece top / foot offsets in px."""
     rng = rng or np.random.RandomState(0)
     img = np.zeros((SIZE, SIZE, 3), np.uint8)
     for r in range(8):
@@ -26,17 +27,29 @@ def render_topdown(grid, parity=1, black_piece_level=38, dark_level=22,
             d = int(grid[r][c])
             if d == 0:
                 continue
-            # tall pieces seen at an angle: top face shifted a bit
-            cx = c * CELL + CELL // 2 + int(rng.randint(-6, 7))
-            cy = r * CELL + CELL // 2 - 8 + int(rng.randint(-4, 5))
+            if centres is not None:
+                cx = c * CELL + CELL // 2 + centres[(r, c)][0]
+                cy = r * CELL + CELL // 2 + centres[(r, c)][1]
+            else:
+                # tall pieces seen at an angle: top face shifted a bit
+                cx = c * CELL + CELL // 2 + int(rng.randint(-6, 7))
+                cy = r * CELL + CELL // 2 - 8 + int(rng.randint(-4, 5))
+            wall = (150, 150, 145) if d == 1 else (black_piece_level - 8,) * 3
+            if feet is None:
+                cv2.circle(img, (cx, cy + 6), 31, wall, -1)                  # side wall
+            else:
+                # side wall: the silhouette from the piece's foot up to its top
+                fx = c * CELL + CELL // 2 + feet[(r, c)][0]
+                fy = r * CELL + CELL // 2 + feet[(r, c)][1]
+                for t in np.linspace(0.0, 1.0, 8):
+                    pt = (int(round(fx + t * (cx - fx))), int(round(fy + t * (cy - fy))))
+                    cv2.circle(img, pt, 31, wall, -1)
             if d == 1:
-                cv2.circle(img, (cx, cy + 6), 31, (150, 150, 145), -1)       # side wall
                 cv2.circle(img, (cx, cy), 30, (white_piece_level,) * 3, -1)
                 for rr in (22, 14, 6):
                     cv2.circle(img, (cx, cy), rr, (white_piece_level - 35,) * 3, 1)
             else:
                 b = black_piece_level
-                cv2.circle(img, (cx, cy + 6), 31, (b - 8,) * 3, -1)
                 cv2.circle(img, (cx, cy), 30, (b,) * 3, -1)
                 cv2.ellipse(img, (cx, cy), (27, 27), 0, 200, 320, (b + 25,) * 3, 2)  # sheen
                 cv2.circle(img, (cx, cy), 18, (b - 6,) * 3, 1)
