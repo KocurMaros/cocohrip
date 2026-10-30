@@ -1,13 +1,16 @@
 # Physical chess pieces: per piece type the height of the piece, the height
 # of the gripper fingertips (ur5e_robotiq_hande_end) above the board when
-# gripping, and the piece's width there - metres.
-# ESTIMATES from the camera image - replace with the measured values.
+# gripping, and the piece's width there (as the Hand-E reports it) - metres.
+# Measured with the gripper on 2026-10-30 (tools/measure_pieces.py, raw data
+# in piece_measurements_2026-10-30.json); every grip was lift-tested.
+# The Hand-E body is 46.5 mm above the fingertips: grip_height must stay
+# above height - 0.0465 + ~0.008, or the gripper body hits the piece's top.
 pieces:
-  K: {height: 0.085, grip_height: 0.030, grip_width: 0.024}
-  Q: {height: 0.075, grip_height: 0.028, grip_width: 0.023}
-  B: {height: 0.065, grip_height: 0.025, grip_width: 0.021}
-  N: {height: 0.055, grip_height: 0.022, grip_width: 0.024}
-  R: {height: 0.050, grip_height: 0.022, grip_width: 0.024}
-  P: {height: 0.045, grip_height: 0.018, grip_width: 0.019}
+  K: {height: 0.065, grip_height: 0.030, grip_width: 0.0178}
+  Q: {height: 0.055, grip_height: 0.020, grip_width: 0.0161}
+  B: {height: 0.050, grip_height: 0.015, grip_width: 0.0143}
+  N: {height: 0.045, grip_height: 0.012, grip_width: 0.0155}
+  R: {height: 0.040, grip_height: 0.015, grip_width: 0.0147}
+  P: {height: 0.030, grip_height: 0.015, grip_width: 0.0108}
 # clearance between the carried piece and the tallest piece on the board
 travel_margin: 0.025
