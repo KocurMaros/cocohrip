@@ -23,7 +23,9 @@ Branch `feat/chess`. On the robot PC it lives in its own workspace,
    wrong-move feedback, hand detection, lighting changes, grip failures.
 4. Piece centring from the camera (`PickPlace.offset_*` is 0 so far).
 5. Turn the gripper by the direction the knight's head faces.
-6. Check the robot_move_done fix (`9c2e372`) with checkers too, then merge to main.
+6. Explicit colour choice for the player (W/B keys, `human_color` parameter).
+   Today the colour is detected from the set-up.
+7. Check the robot_move_done fix (`9c2e372`) with checkers too, then merge to main.
 
 Optional: lc0 on the GPU (stronger Leela nets), take-back key, saving games as PGN.
 
