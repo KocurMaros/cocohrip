@@ -32,13 +32,14 @@ def test_frames_round_trip_and_robot_corners():
     assert logical_to_game(chess.E1, human_white=False) == printed_to_game(chess.D8)
 
 
-def test_offboard_layout():
+def test_offboard_layout_left_then_right():
     lay = OffBoardLayout()
-    assert lay.storage(0) == (0.0, -1.4)
-    assert lay.storage(8) == (0.0, -2.5)
+    assert lay.storage_slots == 16
+    assert lay.storage(0) == (0.0, -1.8)
+    assert lay.storage(7) == (7.0, -1.8)
+    assert lay.storage(8) == (0.0, 8.8)
     with pytest.raises(IndexError):
         lay.storage(lay.storage_slots)
-    assert lay.reserve("q")[1] == lay.reserve("N")[1] == 8.4
 
 
 # ------------------------------------------------------------------ setup
@@ -110,10 +111,24 @@ def test_castling_en_passant_capture_are_recognised_colour_only():
     assert g.infer_human_move(obs_after(g, "e4d5", n=3)).move.uci() == "e4d5"
 
 
-def test_promotion_piece_from_classifier_or_queen_by_default():
+def test_promotion_is_virtual_queen_by_default_or_chosen_piece():
     g = started("8/4P1k1/8/8/8/8/8/4K3 w - - 0 1")
-    assert g.infer_human_move(obs_after(g, "e7e8n", n=13)).move.uci() == "e7e8n"
-    assert g.infer_human_move(obs_after(g, "e7e8n", n=3)).move.uci() == "e7e8q"
+    # the pawn stays a pawn on the board - the camera sees a pawn on e8
+    obs = obs_after(g, "e7e8q", n=13)
+    assert obs[chess.E8].argmax() == 1
+    assert g.infer_human_move(obs).move.uci() == "e7e8q"
+    g.promotion_piece = chess.KNIGHT
+    assert g.infer_human_move(obs_after(g, "e7e8n", n=3)).move.uci() == "e7e8n"
+
+
+def test_promoted_queen_still_looks_like_a_pawn_later():
+    g = started("8/4P1k1/8/8/8/8/8/4K3 w - - 0 1")
+    g.push(chess.Move.from_uci("e7e8q"))
+    g.push(chess.Move.from_uci("g7g6"))
+    # the "queen" (a pawn on the board) moves like a queen: e8 -> a4
+    inf = g.infer_human_move(obs_after(g, "e8a4"))
+    assert inf.kind == "move" and inf.move.uci() == "e8a4"
+    assert labels_for(g.board, True, appearance=False)[chess.E8] == 5     # Q in the game
 
 
 def test_illegal_move_is_rejected_with_closest_move():
@@ -180,11 +195,17 @@ def test_plan_en_passant_removes_the_passed_pawn():
         "P: e4 -> storage#0", "p: d4 -> e3"]
 
 
-def test_plan_promotion_reserve_and_human():
+def test_plan_promotion_moves_the_pawn_and_robot_grips_promoted_pieces_as_pawns():
     fen = "3r2k1/4P3/8/8/8/8/8/4K3 w - - 0 1"
-    assert plan(fen, "e7d8q") == [
-        "r: d8 -> storage#0", "P: e7 -> storage#1", "Q: reserve[Q] -> d8"]
-    assert plan(fen, "e7e8q", promotion="human") == ["P: e7 -> e8"]
+    assert plan(fen, "e7d8q") == ["r: d8 -> storage#0", "P: e7 -> d8"]
+    g = started("4k3/8/8/8/8/8/8/4K2q b - - 0 1", human_white=False)
+    g.board.promoted |= chess.BB_H1            # a promoted human queen
+    g.board.turn = chess.WHITE
+    assert [str(s) for s in g.plan_robot_move(chess.Move.from_uci("e1f1"))] == ["K: e1 -> f1"]
+    g.board.set_piece_at(chess.G2, chess.Piece.from_symbol("K"))
+    g.board.remove_piece_at(chess.E1)
+    assert [str(s) for s in g.plan_robot_move(chess.Move.from_uci("g2h1"))] == [
+        "p: h1 -> storage#0", "K: g2 -> h1"]
 
 
 def test_storage_slots_count_up_over_the_game():

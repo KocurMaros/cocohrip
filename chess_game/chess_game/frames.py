@@ -13,7 +13,7 @@ Three ways to name a square:
   the robot's side (printed rank 8), row 7 the human's side (printed rank
   1), col 0 the human's left (printed a-file).  robot_control turns these
   into robot XY from the two measured corner squares; off-board places
-  (storage, reserve) are just fractional / out-of-range rows and cols.
+  (storage) are just fractional / out-of-range rows and cols.
 """
 
 import chess
@@ -42,37 +42,21 @@ def logical_to_game(logical_sq, human_white):
 
 
 class OffBoardLayout:
-    """Where pieces go off the board, in game-frame squares.
+    """Storage slots for the human's pieces the robot captures, in game-frame
+    squares: one column of ``storage_rows`` slots beside the human's left
+    edge (col ``left_col``), then one beside the right edge (``right_col``) -
+    the same places as in checkers, 16 slots for at most 15 pieces.  Each
+    column fills from the robot's side (row 0)."""
 
-    storage: captured human pieces (and the robot's promoted pawns) - a grid
-    of ``storage_rows`` x ``storage_cols`` slots beside the human's left
-    edge (negative cols), filled column by column from the robot's side.
-    reserve: one slot per piece symbol for promotions (the human puts e.g. a
-    spare queen there); beside the human's right edge.
-    """
-
-    def __init__(self, storage_first_col=-1.4, storage_col_step=-1.1, storage_rows=8,
-                 storage_cols=2, reserve_col=8.4, reserve_first_row=1.0, reserve_row_step=1.1):
-        self.storage_first_col = float(storage_first_col)
-        self.storage_col_step = float(storage_col_step)
+    def __init__(self, left_col=-1.8, right_col=8.8, storage_rows=8):
+        self.cols = (float(left_col), float(right_col))
         self.storage_rows = int(storage_rows)
-        self.storage_cols = int(storage_cols)
-        self.reserve_col = float(reserve_col)
-        self.reserve_first_row = float(reserve_first_row)
-        self.reserve_row_step = float(reserve_row_step)
 
     @property
     def storage_slots(self):
-        return self.storage_rows * self.storage_cols
+        return self.storage_rows * len(self.cols)
 
     def storage(self, k):
         if not 0 <= k < self.storage_slots:
             raise IndexError(f"storage slot {k} out of range (0..{self.storage_slots - 1})")
-        return (float(k % self.storage_rows),
-                self.storage_first_col + (k // self.storage_rows) * self.storage_col_step)
-
-    def reserve(self, symbol):
-        """Reserve slot of a piece symbol: Q/q first, then R, B, N."""
-        order = "QRBN"
-        i = order.index(symbol.upper())
-        return self.reserve_first_row + i * self.reserve_row_step, self.reserve_col
+        return float(k % self.storage_rows), self.cols[k // self.storage_rows]

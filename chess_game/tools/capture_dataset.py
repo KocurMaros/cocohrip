@@ -5,7 +5,7 @@ Run on the robot PC with its display (stop the game nodes first, they hold
 the camera):
 
     source ~/checkers_ws/install/setup.bash
-    python3 ~/checkers_ws/src/chess_game/tools/capture_dataset.py --lighting room
+    python3 ~/chess_ws/src/cocohrip/chess_game/tools/capture_dataset.py --lighting normal
     python3 .../capture_dataset.py --resume ~/chess_dataset/<session>
     python3 .../capture_dataset.py --replay a.jpg b.jpg        # no camera
 
@@ -59,7 +59,7 @@ CALIB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "chess_ga
                      "ximea_calibration_600.npz")
 WORK_SCALE = 0.5                       # detection / change checks on half resolution
 BRACKET = (1.0, 0.55, 1.8)             # exposures per position, x the base exposure
-LIGHTINGS = ["room", "lamp", "dim", "daylight", "mixed", "side"]
+LIGHTINGS = ["normal", "dark", "bright"]       # dark room / normal / too much light
 STILL_S = 1.0                          # board must be still this long before auto photos
 LIGHT_CHANGE_EVERY = 150               # remind to change the lights every N positions
 
@@ -338,7 +338,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out", default="~/chess_dataset")
     ap.add_argument("--resume", help="session directory to continue")
-    ap.add_argument("--lighting", default="room", help="tag stored with every photo")
+    ap.add_argument("--lighting", default="normal", choices=LIGHTINGS,
+                    help="tag stored with every photo (L cycles it)")
     ap.add_argument("--a1-corner", default="BR", choices=["BL", "TL", "TR", "BR"],
                     help="raw-image corner of printed a1 (BR for the cell's camera)")
     ap.add_argument("--manual", action="store_true", help="click the board corners")

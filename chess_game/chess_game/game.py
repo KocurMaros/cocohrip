@@ -10,13 +10,19 @@ frames.py), a probability vector over either
 * 13 classes: CLASSES = empty, P N B R Q K (white), p n b r q k (black), or
 * 3 classes:  empty, white piece, black piece.
 
+There are no spare pieces: a promoted pawn stays a pawn on the board and is
+a queen (or the piece chosen) only in the game - the dashboard marks it.
+The camera is therefore matched against the *appearance* of the board
+(promoted pieces look like pawns, python-chess tracks them in
+``board.promoted``).
+
 Move inference does not trust any single square.  Every legal move (and "no
 move") gives a predicted board; each prediction is scored by the
 log-likelihood of the whole observation and the best one wins if it beats
 the runner-up clearly.  A colour-only (3-class) detector is enough to follow
-a game - every legal move changes the colour occupancy differently, except
-the choice of promotion piece (queen unless the piece classifier says
-otherwise).
+a game - every legal move changes the colour occupancy differently.  The
+promotion piece cannot be seen; it is ``ChessGame.promotion_piece`` (queen
+unless the human picks another one).
 """
 
 import math
@@ -49,10 +55,14 @@ def collapse_to_colour(probs13):
     return np.stack([p[:, 0], p[:, 1:7].sum(axis=1), p[:, 7:13].sum(axis=1)], axis=1)
 
 
-def labels_for(board, human_white):
-    """13-class label of every printed square for a python-chess board."""
+def labels_for(board, human_white, appearance=True):
+    """13-class label of every printed square for a python-chess board.
+    appearance: promoted pieces are labelled as the pawns they physically
+    are (what the camera sees)."""
     out = np.zeros(64, dtype=int)
     for logical_sq, piece in board.piece_map().items():
+        if appearance and board.promoted & chess.BB_SQUARES[logical_sq]:
+            piece = chess.Piece(chess.PAWN, piece.color)
         out[logical_to_printed(logical_sq, human_white)] = class_index(piece)
     return out
 
@@ -111,17 +121,14 @@ class Inference:
 @dataclass
 class Place:
     """Where the robot picks or places a piece."""
-    kind: str                      # 'square' | 'storage' | 'reserve'
+    kind: str                      # 'square' | 'storage'
     square: int = None             # logical square (kind 'square')
     slot: int = None               # storage slot (kind 'storage')
-    symbol: str = None             # reserve slot of this piece (kind 'reserve')
 
     def __str__(self):
         if self.kind == "square":
             return chess.square_name(self.square)
-        if self.kind == "storage":
-            return f"storage#{self.slot}"
-        return f"reserve[{self.symbol}]"
+        return f"storage#{self.slot}"
 
 
 @dataclass
@@ -150,20 +157,18 @@ class SetupCheck:
 class ChessGame:
     """Rules state + camera interpretation for one game.
 
-    promotion: 'reserve' - the robot fetches the new piece from the reserve
-    slot of that piece (the human puts spare pieces there); 'human' - the
-    robot moves the pawn to the last rank and the human swaps it.
+    promotion_piece: what a human pawn promotes to (the camera cannot see
+    it - the pawn stays on the board); the robot picks its own.
     max_noise_squares: confidently contradicting squares (outside the
     move's own squares) that are ignored as detection noise.  0 = a single
     lifted / misplaced piece makes the board "invalid" until it is fixed.
     """
 
-    def __init__(self, human_white=True, max_noise_squares=0, min_margin=math.log(50),
-                 promotion="reserve"):
+    def __init__(self, human_white=True, max_noise_squares=0, min_margin=math.log(50)):
         self.human_white = human_white
         self.max_noise_squares = max_noise_squares
         self.min_margin = min_margin
-        self.promotion = promotion
+        self.promotion_piece = chess.QUEEN
         self.board = None
         self.storage_used = 0
         self.log = []
@@ -278,7 +283,7 @@ class ChessGame:
             key = obs_labels.tobytes()
             prev = groups.get(key)
             if prev is None or score > prev[0] + 1e-9 or (
-                    abs(score - prev[0]) <= 1e-9 and _prefer(move, prev[1])):
+                    abs(score - prev[0]) <= 1e-9 and self._prefer(move, prev[1])):
                 groups[key] = (score, move, obs_labels)
         ranked = sorted(groups.values(), key=lambda g: -g[0])
         best_score, best_move, best_labels = ranked[0]
@@ -310,6 +315,13 @@ class ChessGame:
             inf.closest_diff = contradicting(obs, closest[2])
         return inf
 
+    def _prefer(self, move, other):
+        """Tie-break inside a group the camera cannot tell apart (the
+        promotion piece): the human's chosen promotion piece."""
+        want = self.promotion_piece
+        return (move is not None and move.promotion == want
+                and (other is None or other.promotion != want))
+
     def _describe(self, move):
         return "no move" if move is None else self.board.san(move)
 
@@ -334,8 +346,7 @@ class ChessGame:
         capture       captured piece -> storage, then the move
         en passant    the pawn beside the target -> storage, then the move
         castling      king, then rook
-        promotion     ('reserve') pawn -> storage, reserve piece -> target;
-                      ('human') pawn -> target, the human swaps it
+        promotion     the pawn moves; it is the new piece only in the game
         """
         b = self.board
         piece = b.piece_at(move.from_square)
@@ -355,9 +366,9 @@ class ChessGame:
         if b.is_en_passant(move):
             cap = chess.square(chess.square_file(move.to_square),
                                chess.square_rank(move.from_square))
-            steps.append(Step(b.piece_at(cap).symbol(), square(cap), storage()))
+            steps.append(Step(self.physical_symbol(cap), square(cap), storage()))
         elif b.is_capture(move):
-            steps.append(Step(b.piece_at(move.to_square).symbol(), square(move.to_square),
+            steps.append(Step(self.physical_symbol(move.to_square), square(move.to_square),
                               storage()))
 
         if b.is_castling(move):
@@ -366,21 +377,21 @@ class ChessGame:
             rook_from = chess.square(7 if kingside else 0, rank)
             rook_to = chess.square(5 if kingside else 3, rank)
             steps.append(Step(piece.symbol(), square(move.from_square), square(move.to_square)))
-            steps.append(Step(b.piece_at(rook_from).symbol(), square(rook_from), square(rook_to)))
-        elif move.promotion and self.promotion == "reserve":
-            new = chess.Piece(move.promotion, piece.color).symbol()
-            steps.append(Step(piece.symbol(), square(move.from_square), storage()))
-            steps.append(Step(new, Place("reserve", symbol=new), square(move.to_square)))
+            steps.append(Step(self.physical_symbol(rook_from), square(rook_from), square(rook_to)))
         else:
-            steps.append(Step(piece.symbol(), square(move.from_square), square(move.to_square)))
+            steps.append(Step(self.physical_symbol(move.from_square), square(move.from_square),
+                              square(move.to_square)))
         return steps
 
+    def physical_symbol(self, logical_sq):
+        """FEN symbol of the piece that physically stands on a square (a
+        promoted piece is a pawn) - the robot grips by it."""
+        piece = self.board.piece_at(logical_sq)
+        if self.board.promoted & chess.BB_SQUARES[logical_sq]:
+            piece = chess.Piece(chess.PAWN, piece.color)
+        return piece.symbol()
 
-def _prefer(move, other):
-    """Tie-break inside a group the camera cannot tell apart: promote to a
-    queen."""
-    return (move is not None and move.promotion == chess.QUEEN
-            and (other is None or other.promotion != chess.QUEEN))
+
 
 
 def _status_text(status):
