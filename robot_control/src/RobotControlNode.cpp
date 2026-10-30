@@ -632,16 +632,16 @@ void RobotControlNode::mainLoop() {
                 
                 isRobotMoving.store(false);
                 
-                if(isRobotSendingHome.load()) {
+                // ros_out_callback() may already have cleared isRobotSendingHome
+                // on the first leg's "Movement successful!" (it leaves the
+                // done message to this thread) - so publish regardless
+                if (isRobotSendingHome.exchange(false)) {
                     fileIndex++;
                     currentFileName = "robot_data_" + std::to_string(fileIndex) + ".csv";
-                    isRobotSendingHome.store(false);
-                    isFinalHome.store(false);
-                    
-                    RCLCPP_INFO(this->get_logger(), "✅ All tasks complete! Robot at HOME");
-                    
-                    publishMoveDone();
                 }
+                isFinalHome.store(false);
+                RCLCPP_INFO(this->get_logger(), "✅ All tasks complete! Robot at HOME");
+                publishMoveDone();
             });
         }
     }
