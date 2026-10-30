@@ -24,6 +24,7 @@
     <depend>tf2_eigen</depend>
     <depend>tf2_geometry_msgs</depend>
     <depend>checkers_msgs</depend>
+    <depend>chess_msgs</depend>
     <depend>moveit_visual_tools</depend>
     <depend>rviz_visual_tools</depend>
     <depend>gripper_srv</depend>

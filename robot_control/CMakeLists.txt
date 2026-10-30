@@ -21,6 +21,7 @@ find_package(tf2_ros REQUIRED)
 find_package(tf2_eigen REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(checkers_msgs REQUIRED)
+find_package(chess_msgs REQUIRED)
 find_package(moveit_visual_tools REQUIRED)
 find_package(rviz_visual_tools REQUIRED)
 find_package(gripper_srv REQUIRED)
@@ -69,6 +70,7 @@ ament_target_dependencies(robot_control_node
     tf2_eigen
     tf2_geometry_msgs
     checkers_msgs
+    chess_msgs
     moveit_visual_tools
     gripper_srv
     rviz_visual_tools

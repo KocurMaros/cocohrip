@@ -1,8 +1,10 @@
 #include "robot_control/RobotControlNode.hpp"
 #include "robot_control/RobotPoseUtility.hpp"
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
+#include <tuple>
 #include <filesystem>
 
 using namespace std::chrono_literals;
@@ -25,6 +27,9 @@ RobotControlNode::RobotControlNode()
         "/move_topic", 10, std::bind(&RobotControlNode::checkers_move_callback, this, std::placeholders::_1));
     
     RCLCPP_INFO(this->get_logger(), "Subscribed to /move_topic - ready to receive move commands");
+
+    chessMoveSub = this->create_subscription<chess_msgs::msg::ChessRobotMove>(
+        "/chess/robot_move", 10, std::bind(&RobotControlNode::chess_move_callback, this, std::placeholders::_1));
         
     handDetectedSub = this->create_subscription<checkers_msgs::msg::HandDetected>(
         "/hand_detected", 10, std::bind(&RobotControlNode::hand_detected_callback, this, std::placeholders::_1));
@@ -96,7 +101,9 @@ RobotControlNode::RobotControlNode()
     // position; the Hand-E stops on the piece, reaching the target = a miss
     const auto closePos = this->declare_parameter<int64_t>("gripper_close_position", 111);
     const double extraMm = std::clamp(this->declare_parameter<double>("grip_extra_mm", 10.0), 0.0, 20.0);
+    gripExtraMm = extraMm;
     gripCloseTarget = std::clamp(static_cast<int>(closePos + std::lround(extraMm * kHandeCountsPerMm)), 0, 255);
+    chessPlaceClearance = std::clamp(this->declare_parameter<double>("chess_place_clearance", 0.002), 0.0, 0.01);
     gripForce = std::clamp(static_cast<int>(this->declare_parameter<int64_t>("grip_force", 20)), 1, 255);
     gripRetries = std::max(0, static_cast<int>(this->declare_parameter<int64_t>("grip_retries", 1)));
     pickOffsetMax = std::clamp(this->declare_parameter<double>("pick_offset_max", 0.012), 0.0, 0.015);
@@ -157,9 +164,14 @@ void RobotControlNode::openGripper() {
 
 void RobotControlNode::closeGripper() {
     const int attempt = ++gripAttempts;
-    RCLCPP_INFO(this->get_logger(), "Closing gripper to %d (attempt %d)", gripCloseTarget, attempt);
+    int closeTarget = gripCloseTarget;
+    if (target_pose_index >= 0 && static_cast<std::size_t>(target_pose_index) < targetPositions.size()
+            && targetPositions[target_pose_index].gripClose >= 0) {
+        closeTarget = targetPositions[target_pose_index].gripClose;   // chess: per piece type
+    }
+    RCLCPP_INFO(this->get_logger(), "Closing gripper to %d (attempt %d)", closeTarget, attempt);
     auto request = std::make_shared<gripper_srv::srv::GripperService::Request>();
-    request->position = gripCloseTarget;
+    request->position = closeTarget;
     request->speed = 10;  // Faster gripper speed
     request->force = gripForce;
     gripPending = true;
@@ -210,8 +222,9 @@ void RobotControlNode::giveUpPick() {
     RCLCPP_ERROR(this->get_logger(), "Giving up this move: could not grip the piece on game square (%d, %d)",
                  pickFailedRow, pickFailedCol);
     removePiece();
-    createFakePieceWithColor("piece" + std::to_string(mission.row) + std::to_string(mission.col),
-                             mission.row, mission.col, mission.color);
+    auto [failX, failY] = missionXY(mission);
+    createFakePieceAt("piece" + std::to_string(mission.row) + std::to_string(mission.col),
+                      failX, failY, mission.color);
     chessBoardPub->publish(marker_array_fake_pieces);
     // drop the remaining pick/place pairs: mainLoop() finishes this trajectory
     // and goes HOME, which reports the failure (publishMoveDone)
@@ -324,7 +337,7 @@ void RobotControlNode::mainLoop() {
             float target_x = static_cast<float>(a1X + (3.5 - 7.0) * urX + 3.5 * ucX);
             float target_y = static_cast<float>(a1Y + (3.5 - 7.0) * urY + 3.5 * ucY);
             if (!targetPositions.empty()) {
-                auto [tx, ty] = missionToXY(targetPositions[0].row, targetPositions[0].col);
+                auto [tx, ty] = missionXY(targetPositions[0]);
                 target_x = static_cast<float>(tx);
                 target_y = static_cast<float>(ty);
             }
@@ -645,10 +658,11 @@ void RobotControlNode::makeTask(Mission mission) {
 
     std::string pieceID = "piece" + std::to_string(row) + std::to_string(col);
 
+    auto [taskX, taskY] = missionXY(mission);
     if(task == Task::ATTACH) {
         if (gripAttempts == 0) {
             removeFakePiece(pieceID);
-            createPiece(row, col);
+            createPieceAt(taskX, taskY);
         }
         // attachPiece();
         closeGripper();
@@ -657,7 +671,7 @@ void RobotControlNode::makeTask(Mission mission) {
     else {
         // detachPiece();
         removePiece();
-        createFakePieceWithColor(pieceID, row, col, color);
+        createFakePieceAt(pieceID, taskX, taskY, color);
         chessBoardPub->publish(marker_array_fake_pieces);
         openGripper();
     }
@@ -1144,6 +1158,78 @@ void RobotControlNode::checkers_move_callback(const checkers_msgs::msg::Move::Sh
         RCLCPP_INFO(this->get_logger(), "Prepared trajectory with %zu poses", trajectory_list.size());
     }
 }
+void RobotControlNode::chess_move_callback(const chess_msgs::msg::ChessRobotMove::SharedPtr msg) {
+    RCLCPP_INFO(this->get_logger(), "\n========================================");
+    RCLCPP_INFO(this->get_logger(), "RECEIVED CHESS MOVE %s (%s): %zu pick/place steps, travel %.3f m",
+                msg->san.c_str(), msg->uci.c_str(), msg->steps.size(), msg->travel_height);
+    RCLCPP_INFO(this->get_logger(), "========================================\n");
+    if (msg->steps.empty()) {
+        publishMoveDone();
+        return;
+    }
+    if (isRobotMoving.load() || !targetPositions.empty()) {
+        abortAndClearMovement();
+    }
+    targetPositions.clear();
+    trajectory_list.clear();
+    target_pose_index = -1;
+    trajectory_pose_index = 0;
+
+    // never lower than the checkers travel height
+    const double travel = std::max<double>(msg->travel_height, zSafeTransition);
+    for (const auto& step : msg->steps) {
+        const std::string color = (!step.piece.empty() && std::isupper(static_cast<unsigned char>(step.piece[0])))
+                                  ? whiteColorString : redColorString;
+        const int close = gripCloseForWidth(step.grip_width);
+        Mission pick = chessMission(step.pick_row, step.pick_col, color, Task::ATTACH,
+                                    step.grip_height, travel, close);
+        pick.offsetRow = step.offset_row;
+        pick.offsetCol = step.offset_col;
+        targetPositions.push_back(pick);
+        targetPositions.push_back(chessMission(step.place_row, step.place_col, color, Task::DETACH,
+                                               step.grip_height + chessPlaceClearance, travel, -1));
+        RCLCPP_INFO(this->get_logger(), "  %s: game (%.1f, %.1f) -> (%.1f, %.1f), grip at %.3f m, "
+                    "width %.1f mm -> close to %d", step.piece.c_str(), step.pick_row, step.pick_col,
+                    step.place_row, step.place_col, step.grip_height, step.grip_width * 1000.0, close);
+    }
+
+    target_pose_index = 0;
+    trajectory_pose_index = 0;
+    trajectory_list = getPoseList(targetPositions[0]);
+    RCLCPP_INFO(this->get_logger(), "Prepared trajectory with %zu poses", trajectory_list.size());
+}
+
+Mission RobotControlNode::chessMission(double gameRow, double gameCol, const std::string& color, Task task,
+                                       double zGrip, double zTravel, int gripClose) {
+    // board squares keep their integer mission square (RViz ids, grip-failure
+    // report); places beside the board get unique marker ids
+    const bool onSquare = gameRow > -0.01 && gameRow < 7.01 && gameCol > -0.01 && gameCol < 7.01
+                          && std::abs(gameRow - std::round(gameRow)) < 0.01
+                          && std::abs(gameCol - std::round(gameCol)) < 0.01;
+    int row, col;
+    if (onSquare) {
+        std::tie(row, col) = rotate90DegreesCounterClockwise(static_cast<int>(std::lround(gameRow)),
+                                                            static_cast<int>(std::lround(gameCol)));
+    } else {
+        row = STORAGE_ROW_BASE + 50 + (chessMarkerCount++ % 40);
+        col = 0;
+    }
+    Mission mission(row, col, color, task);
+    std::tie(mission.x, mission.y) = gameToXY(gameRow, gameCol);
+    mission.hasXY = true;
+    mission.zGrip = zGrip;
+    mission.zTravel = zTravel;
+    mission.gripClose = gripClose;
+    return mission;
+}
+
+int RobotControlNode::gripCloseForWidth(double widthM) const {
+    // Hand-E: 0 = 50 mm open, 255 = closed; close grip_extra_mm past the
+    // piece so stopping on it means "gripped" (as for checkers)
+    const double targetMm = widthM * 1000.0 - gripExtraMm;
+    return std::clamp(static_cast<int>(std::lround((50.0 - targetMm) * kHandeCountsPerMm)), 0, 255);
+}
+
 void RobotControlNode::computeBoardGeometry(double h8x, double h8y, double a1x, double a1y) {
     // H8 = game (0,7), A1 = game (7,0):  H8 - A1 = 7 * (u_c - u_r).
     // Square board, not mirrored: u_c = u_r rotated by +90 deg, i.e.
@@ -1163,6 +1249,18 @@ void RobotControlNode::computeBoardGeometry(double h8x, double h8y, double a1x, 
     boardOffsetY = static_cast<float>(oy);
 }
 
+std::pair<double, double> RobotControlNode::gameToXY(double gameRow, double gameCol) const {
+    return {a1X + (gameRow - 7.0) * urX + gameCol * ucX,
+            a1Y + (gameRow - 7.0) * urY + gameCol * ucY};
+}
+
+std::pair<double, double> RobotControlNode::missionXY(const Mission& mission) const {
+    if (mission.hasXY) {
+        return {mission.x, mission.y};
+    }
+    return missionToXY(mission.row, mission.col);
+}
+
 std::pair<double, double> RobotControlNode::missionToXY(int row, int col) const {
     double gameRow, gameCol;
     if (row >= STORAGE_ROW_BASE) {
@@ -1175,15 +1273,14 @@ std::pair<double, double> RobotControlNode::missionToXY(int row, int col) const 
         gameRow = 7.0 - col;
         gameCol = row;
     }
-    return {a1X + (gameRow - 7.0) * urX + gameCol * ucX,
-            a1Y + (gameRow - 7.0) * urY + gameCol * ucY};
+    return gameToXY(gameRow, gameCol);
 }
 
 std::vector<std::pair<geometry_msgs::msg::Pose, Task>> RobotControlNode::getPoseList(Mission mission) {
     trajectory_pose_index = 0;
     std::vector<std::pair<geometry_msgs::msg::Pose, Task>> poses;
 
-    auto [targetX, targetY] = missionToXY(mission.row, mission.col);
+    auto [targetX, targetY] = missionXY(mission);
     float posX = static_cast<float>(targetX);
     float posY = static_cast<float>(targetY);
 
@@ -1225,6 +1322,11 @@ std::vector<std::pair<geometry_msgs::msg::Pose, Task>> RobotControlNode::getPose
         RCLCPP_WARN(this->get_logger(), "Clamped to: X=%.4f, Y=%.4f", posX, posY);
     }
 
+    // chess pieces are taller: their moves bring their own travel / grip heights
+    const float zTravel = std::isnan(mission.zTravel) ? zSafeTransition
+                                                      : static_cast<float>(mission.zTravel);
+    const float zTask = std::isnan(mission.zGrip) ? zAttach : static_cast<float>(mission.zGrip);
+
     // Check if we need intermediate waypoints for safe movement
     auto current_pose_opt = pose_utility_->getCurrentPose();
     bool added_approach_waypoint = false;
@@ -1241,7 +1343,7 @@ std::vector<std::pair<geometry_msgs::msg::Pose, Task>> RobotControlNode::getPose
                    posX, posY, horizontal_distance);
         
         // OPTIMIZED: Only add lift waypoint if we're below safe height AND need to travel
-        if (current_pose_opt->position.z < zSafeTransition && horizontal_distance > 0.05) {
+        if (current_pose_opt->position.z < zTravel && horizontal_distance > 0.05) {
             geometry_msgs::msg::Pose lift_pose;
             lift_pose.orientation.x = -0.0028119066264480352;
             lift_pose.orientation.y = 0.9999957084655762;
@@ -1249,10 +1351,10 @@ std::vector<std::pair<geometry_msgs::msg::Pose, Task>> RobotControlNode::getPose
             lift_pose.orientation.w = -0.00023792324645910412;
             lift_pose.position.x = current_pose_opt->position.x;
             lift_pose.position.y = current_pose_opt->position.y;
-            lift_pose.position.z = zSafeTransition;  // Lift to 25cm first
+            lift_pose.position.z = zTravel;  // Lift to the travel height first
             poses.push_back(std::make_pair(lift_pose, Task::NONE));
             
-            RCLCPP_INFO(this->get_logger(), "Added lift waypoint to Z=%.2f", zSafeTransition);
+            RCLCPP_INFO(this->get_logger(), "Added lift waypoint to Z=%.3f", zTravel);
         }
         
         // Add travel waypoint above target if moving horizontally
@@ -1264,12 +1366,12 @@ std::vector<std::pair<geometry_msgs::msg::Pose, Task>> RobotControlNode::getPose
             travel_waypoint.orientation.w = -0.00023792324645910412;
             travel_waypoint.position.x = posX;
             travel_waypoint.position.y = posY;
-            travel_waypoint.position.z = zSafeTransition;  // Travel at 25cm height
+            travel_waypoint.position.z = zTravel;  // Travel height
             poses.push_back(std::make_pair(travel_waypoint, Task::NONE));
             added_approach_waypoint = true;
             
             RCLCPP_INFO(this->get_logger(), 
-                       "Added approach waypoint above target at Z=%.2f", zSafeTransition);
+                       "Added approach waypoint above target at Z=%.3f", zTravel);
         }
     }
     
@@ -1280,6 +1382,9 @@ std::vector<std::pair<geometry_msgs::msg::Pose, Task>> RobotControlNode::getPose
         // User requested: "go after taking piece 5 cm above checker board"
         // Same flange-height-to-TCP-height conversion as zAttach/zMoving/zSafeTransition above.
         float zClearance = 0.20 - kHandeFlangeToTcp; // was: 20cm absolute height (clearance above pieces)
+        if (!std::isnan(mission.zTravel)) {
+            zClearance = zTravel;                       // chess: above the tallest piece
+        }
         
         geometry_msgs::msg::Pose above_pose;
         above_pose.orientation.x = -0.0028119066264480352;
@@ -1302,7 +1407,7 @@ std::vector<std::pair<geometry_msgs::msg::Pose, Task>> RobotControlNode::getPose
     pose2.orientation.w = -0.00023792324645910412;
     pose2.position.x = posX;
     pose2.position.y = posY;
-    pose2.position.z = zAttach;
+    pose2.position.z = zTask;
     // Gripper task happens HERE at the lowest point, after reaching position
     poses.push_back(std::make_pair(pose2, mission.task));
 
@@ -1369,6 +1474,12 @@ std::tuple<float, float, float> RobotControlNode::getColorFromName(const std::st
 
 void RobotControlNode::createFakePieceWithColor(const std::string& object_id, int row, int col, 
                                                 const std::string& colorName) {
+    auto [fakeX, fakeY] = missionToXY(row, col);
+    createFakePieceAt(object_id, fakeX, fakeY, colorName);
+}
+
+void RobotControlNode::createFakePieceAt(const std::string& object_id, double fakeX, double fakeY,
+                                         const std::string& colorName) {
     RCLCPP_INFO(this->get_logger(), "Creaing fake piece");\
 
     int objectIDLong = convertStringToInt(object_id);
@@ -1382,7 +1493,6 @@ void RobotControlNode::createFakePieceWithColor(const std::string& object_id, in
     fakePiece.type = visualization_msgs::msg::Marker::CYLINDER;
     fakePiece.action = visualization_msgs::msg::Marker::ADD;
 
-    auto [fakeX, fakeY] = missionToXY(row, col);
     fakePiece.pose.position.x = fakeX;
     fakePiece.pose.position.y = fakeY;
     fakePiece.pose.position.z = 0.0075;
@@ -1442,6 +1552,11 @@ void RobotControlNode::removeFakePiece(const std::string& object_id) {
 }
 
 void RobotControlNode::createPiece(int row, int col) {
+    auto [pieceX, pieceY] = missionToXY(row, col);
+    createPieceAt(pieceX, pieceY);
+}
+
+void RobotControlNode::createPieceAt(double pieceX, double pieceY) {
     RCLCPP_INFO(this->get_logger(), "Creating piece");\
     collision_object = moveit_msgs::msg::CollisionObject();
     collision_object.header.frame_id = "base_link";
@@ -1453,7 +1568,6 @@ void RobotControlNode::createPiece(int row, int col) {
     primitive.dimensions[primitive.CYLINDER_HEIGHT] = 0.005;
     primitive.dimensions[primitive.CYLINDER_RADIUS] = 0.014;
 
-    auto [pieceX, pieceY] = missionToXY(row, col);
     float posX = static_cast<float>(pieceX);
     float posY = static_cast<float>(pieceY);
 
