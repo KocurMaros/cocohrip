@@ -63,7 +63,14 @@ has been executed by the real robot.
 
 ## Next steps (in order)
 
-0. Check `~/chess_final_v3.log`; switch `latest` to `final_v3` if it is good.
+0. On the robot PC: `git pull`, `colcon build`, `bash chess_game/tools/install.sh`
+   (now also installs onnxruntime-gpu; its last lines must say
+   `classifier backend: onnxruntime-gpu`), `ln -sfn ~/chess_models/final_v3
+   ~/chess_models/latest` (final_v3: cleaned labels, 100 % of held-out moves).
+   Then `tools/latency_replay.py` on the PC should give about 0.6 s, and a few
+   moves on the cell confirm it. The speed-ups (GPU, background reading,
+   0.5 s stillness, accepting a reading whose colours changed) and the status
+   spinner were only tested in replay and simulation so far.
 1. **First game on the cell** (see [docs/STARTUP.md](docs/STARTUP.md)): `ros2 launch chess_game chess_game_launch.py` (it
    loads `~/chess_models/latest`). Check move recognition live, with hands and
    lighting changes.

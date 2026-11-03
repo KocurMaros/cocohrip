@@ -4,13 +4,21 @@ Everything chess runs from **`~/chess_ws`** on the robot PC; checkers stays in
 `~/checkers_ws`. Don't mix them in one terminal: open a new terminal for every
 command, as for checkers.
 
+The short version for the terminal is `runing_seq_chess.txt` in the repository
+root (like `runing_seq.txt` for checkers).
+
 ## 0. Once (or after `git pull`)
 
 ```bash
 cd ~/chess_ws/src/cocohrip && git pull
 cd ~/chess_ws && colcon build                      # only ROS Jazzy sourced
-bash ~/chess_ws/src/cocohrip/chess_game/tools/install.sh   # engines etc., skips what is there
+bash ~/chess_ws/src/cocohrip/chess_game/tools/install.sh   # engines, GPU runtime, skips what is there
+ln -sfn ~/chess_models/final_v3 ~/chess_models/latest      # the piece classifier the game loads
 ```
+
+`install.sh` ends by printing the classifier backend: it should say
+`onnxruntime-gpu`. With `onnxruntime-cpu` or `opencv` the game still works,
+but it reads each board in ~0.5 s instead of ~0.05 s.
 
 ## 1. Robot and camera (person at the cell)
 
@@ -50,8 +58,10 @@ asks you to click the corners of a1, a8, h8, h1.
    starts.
 2. Press **S** in the Chess window. If a piece type looks doubtful (e.g. knight
    and bishop swapped), the game starts anyway and names the squares to check.
-3. Your move: move the piece, take your hand away. After about a second the
-   move appears on the game board. If you capture, take the robot's piece off
+3. Your move: move the piece, take your hand away. About half a second
+   later the move appears on the game board. At the right of the banner,
+   "reading the board", "robot is thinking" and "robot is moving" (with a
+   turning circle) show what the system is doing. If you capture, take the robot's piece off
    yourself.
 4. The robot moves. Keep your hands off the board until it is home again. It
    takes your captured pieces to the storage beside the board.

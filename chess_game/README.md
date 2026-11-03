@@ -7,7 +7,7 @@ Branch `feat/chess`. On the robot PC it lives in its own workspace,
 |---|---|
 | rules, move recognition, robot pick/place plans (`game.py`) | done, unit tested |
 | engines: Stockfish / Leela / Maia / any UCI (`engines.py`) | done; installed on the robot PC |
-| ROS node + dashboard (`chess_node.py`) | done, simulated games pass; not run on the cell yet |
+| ROS node + dashboard (`chess_node.py`) | first full game on the cell 2026-11-03; move accepted ~0.6 s after the hand leaves (replay test, GPU) |
 | robot_control executor (`/chess/robot_move`) | done, verified on mock hardware |
 | piece sizes (`config/pieces.yaml`) | measured with the gripper, lift-tested |
 | piece classifier (`vision/classifier.py`, `tools/train_classifier.py`) | `final_v1`: every square right on 225 held-out photos (dark / normal / bright) |
@@ -58,7 +58,12 @@ behind them. The human sits on the printed rank-1 side, the robot on rank 8.
    is rotated so that the piece stands upright with its base at the same spot.
 2. **CNN** (ResNet18, ImageNet-pretrained, fine-tuned on our photos) classifies
    the 64 crops into empty + 12 pieces. It runs as ONNX in OpenCV (no torch in
-   the ROS environment), only when the board has been still for `stable_time`.
+   the ROS environment): onnxruntime on the GPU (~0.05 s per board), on the
+   CPU, or OpenCV as the fallback. A background reader classifies every still
+   frame, and a move is accepted once the board has been still for
+   `stable_time` (0.5 s) and the last 3 readings agree, so the game window
+   never waits for it. A reading that shows other colours than the last one
+   also counts, even if nothing was seen moving.
 3. **Likelihood matching** (`game.py`): every legal move predicts a board,
    scored over all 64 squares; the best one wins if it clearly beats the
    runner-up. Colour alone already identifies every move. A mistake is shown
@@ -119,6 +124,17 @@ python3 ~/chess_ws/src/cocohrip/chess_game/tools/eval_classifier.py \
 
 `eval_classifier` reports accuracy by lighting/exposure and whether every
 recorded game move is recognised from the classifier's probabilities.
+
+### How long does the player wait?
+
+```bash
+python3 chess_game/tools/latency_replay.py ~/chess_dataset/<session> ~/chess_models/latest/piece_classifier.onnx
+```
+
+This replays recorded positions through the real node code (camera and robot
+faked): position, a hand over the board, the next position. It measures from
+the hand leaving to the move being accepted. On a laptop (RTX 5060) 20 of 20
+moves were right, with a median of 0.58 s on the GPU and 0.72 s on the CPU.
 
 ### Robot side without the robot
 

@@ -45,6 +45,16 @@ if python3 -c "import chess" 2>/dev/null; then echo "   installed"; else
   run python3 -m pip install --user --break-system-packages chess
 fi
 
+echo "== onnxruntime-gpu (piece classifier on the GPU: ~0.05 s instead of ~0.5 s per board)"
+if python3 -c "import onnxruntime as o; assert 'CUDAExecutionProvider' in o.get_available_providers()" 2>/dev/null; then
+  echo "   installed"
+else
+  # system Python of ROS: keep numpy 1.x and protobuf < 5 (mediapipe) as they are
+  printf 'numpy<2\nprotobuf<5\n' > /tmp/chess_pip_constraints.txt
+  run python3 -m pip install --user --break-system-packages -c /tmp/chess_pip_constraints.txt \
+      '"onnxruntime-gpu[cuda,cudnn]"'
+fi
+
 echo "== lc0 ($LC0_TAG)"
 run mkdir -p $ENGINES
 if [ -x $ENGINES/lc0 ]; then echo "   $ENGINES/lc0 exists"; else
@@ -77,6 +87,11 @@ import os, sys
 import chess
 sys.path.insert(0, os.environ["CHESS_PKG"])
 from chess_game.engines import create_engine
+import glob
+from chess_game.vision.classifier import SquareClassifier
+models = sorted(glob.glob(os.path.expanduser("~/chess_models/latest/piece_classifier.onnx")))
+if models:
+    print(f"   classifier backend: {SquareClassifier(models[0]).backend}")
 for spec in ("stockfish", "maia", "leela"):
     try:
         with create_engine(spec, fallback=None) as e:
