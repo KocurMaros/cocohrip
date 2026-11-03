@@ -13,6 +13,13 @@ labels are known to be right.
     python3 check_dataset.py ~/chess_dataset/<session>
     python3 check_dataset.py ~/chess_dataset/<session> --rebuild-from 6          # dry run
     python3 check_dataset.py ~/chess_dataset/<session> --rebuild-from 6 --apply  # rewrite labels
+    python3 check_dataset.py ~/chess_dataset/<session> --model m.onnx [--fix]   # piece types
+
+--model: a trained classifier looks at every photo.  Squares where it is
+sure (all three exposures agree, p > 0.9, label p < 0.05) that the photo
+shows another piece than the label are listed - typically a piece placed
+with the wrong type or colour, which the change detection cannot see.
+--fix relabels exactly those squares (old label kept in "model_fixed").
 
 --apply keeps the old file as labels.before_rebuild.jsonl and the old label
 of every changed photo in its "relabelled_from" field.
@@ -47,12 +54,68 @@ def names(squares):
     return ",".join(chess.square_name(q) for q in sorted(squares)) or "-"
 
 
+def check_with_model(S, model_path, fix):
+    from chess_game.game import CLASSES
+    from chess_game.vision.classifier import SquareClassifier, square_crops
+    clf = SquareClassifier(model_path)
+    recs = read_labels(os.path.join(S, "labels.jsonl"))
+    by_step = {}
+    for r in recs:
+        by_step.setdefault(r["step"], []).append(r)
+    intr = None
+    fixes = {}
+    for step, group in sorted(by_step.items()):
+        placement = placement_from_fen(group[0]["placement"])
+        labels = np.array([CLASSES.index(placement[q]) if q in placement else 0 for q in range(64)])
+        seen_all = []
+        for r in group:
+            img = cv2.imread(os.path.join(S, r["image"]), cv2.IMREAD_REDUCED_COLOR_2)
+            if intr is None:
+                intr = load_intrinsics(CALIB, (img.shape[1], img.shape[0]))
+            model = BoardModel(np.asarray(r["corners"]) / 2.0, *intr, r.get("a1_corner", "BR"))
+            seen_all.append(clf.predict(square_crops(img, model)))
+        sure = {}
+        for q in range(64):
+            tops = {int(np.argmax(p[q])) for p in seen_all}
+            if len(tops) == 1:
+                top = tops.pop()
+                if top != labels[q] and all(p[q, top] > 0.9 and p[q, labels[q]] < 0.05
+                                            for p in seen_all):
+                    sure[q] = top
+        if sure:
+            fixes[step] = sure
+            print(f"{step:05d} " + "; ".join(
+                f"{chess.square_name(q)}: label {CLASSES[labels[q]]} -> looks like {CLASSES[c]}"
+                for q, c in sorted(sure.items())))
+    print(f"{len(by_step)} positions, {len(fixes)} with confident disagreements")
+    if fix and fixes:
+        shutil.copy(os.path.join(S, "labels.jsonl"), os.path.join(S, "labels.before_model_fix.jsonl"))
+        with open(os.path.join(S, "labels.jsonl"), "w") as f:
+            for r in recs:
+                if r["step"] in fixes:
+                    placement = placement_from_fen(r["placement"])
+                    for q, c in fixes[r["step"]].items():
+                        if c:
+                            placement[q] = CLASSES[c]
+                        else:
+                            placement.pop(q, None)
+                    r.setdefault("model_fixed", r["placement"])
+                    r["placement"] = placement_fen(placement)
+                f.write(json.dumps(r) + "\n")
+        print("labels.jsonl rewritten (old: labels.before_model_fix.jsonl)")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("session")
     ap.add_argument("--rebuild-from", type=int, help="last photo whose label is known to be right")
     ap.add_argument("--apply", action="store_true", help="rewrite labels.jsonl (with --rebuild-from)")
+    ap.add_argument("--model", help="piece classifier (.onnx) to check the piece types")
+    ap.add_argument("--fix", action="store_true", help="relabel what --model is sure about")
     args = ap.parse_args()
+    if args.model:
+        return check_with_model(os.path.expanduser(args.session), os.path.expanduser(args.model),
+                                args.fix)
     S = os.path.expanduser(args.session)
     recs = read_labels(os.path.join(S, "labels.jsonl"))
     photos = [r for r in recs if r["image"].endswith("_e0.jpg")]
