@@ -48,6 +48,8 @@ def main():
     intr = {}
     for d in sessions:
         for rec in read_labels(os.path.join(d, "labels.jsonl")):
+            if rec.get("exclude"):
+                continue
             img = cv2.imread(os.path.join(d, rec["image"]), cv2.IMREAD_REDUCED_COLOR_2)
             if img is None:
                 continue

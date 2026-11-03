@@ -59,6 +59,8 @@ def load_records(session_dirs, val_block=25, val_every=5):
             print(f"skip {d}: no labels.jsonl")
             continue
         for r in read_labels(path):
+            if r.get("exclude"):                  # marked by check_dataset.py
+                continue
             r["path"] = os.path.join(d, r["image"])
             r["session"] = os.path.basename(os.path.normpath(d))
             (val if (r["step"] // val_block) % val_every == val_every - 1 else train).append(r)

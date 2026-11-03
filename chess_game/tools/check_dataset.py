@@ -63,7 +63,7 @@ def check_with_model(S, model_path, fix):
     for r in recs:
         by_step.setdefault(r["step"], []).append(r)
     intr = None
-    fixes = {}
+    fixes, excluded = {}, set()
     for step, group in sorted(by_step.items()):
         placement = placement_from_fen(group[0]["placement"])
         labels = np.array([CLASSES.index(placement[q]) if q in placement else 0 for q in range(64)])
@@ -74,24 +74,32 @@ def check_with_model(S, model_path, fix):
                 intr = load_intrinsics(CALIB, (img.shape[1], img.shape[0]))
             model = BoardModel(np.asarray(r["corners"]) / 2.0, *intr, r.get("a1_corner", "BR"))
             seen_all.append(clf.predict(square_crops(img, model)))
-        sure = {}
+        sure, unsure_kq = {}, False
         for q in range(64):
             tops = {int(np.argmax(p[q])) for p in seen_all}
             if len(tops) == 1:
                 top = tops.pop()
                 if top != labels[q] and all(p[q, top] > 0.9 and p[q, labels[q]] < 0.05
                                             for p in seen_all):
-                    sure[q] = top
+                    if {CLASSES[top], CLASSES[labels[q]]} in ({"K", "Q"}, {"k", "q"}):
+                        unsure_kq = True        # the classifier's weak spot: don't relabel
+                    else:
+                        sure[q] = top
+        if unsure_kq:
+            excluded.add(step)
+            print(f"{step:05d} king/queen disagreement - photo excluded from training")
         if sure:
             fixes[step] = sure
             print(f"{step:05d} " + "; ".join(
                 f"{chess.square_name(q)}: label {CLASSES[labels[q]]} -> looks like {CLASSES[c]}"
                 for q, c in sorted(sure.items())))
-    print(f"{len(by_step)} positions, {len(fixes)} with confident disagreements")
-    if fix and fixes:
+    print(f"{len(by_step)} positions, {len(fixes)} relabelled, {len(excluded)} excluded")
+    if fix and (fixes or excluded):
         shutil.copy(os.path.join(S, "labels.jsonl"), os.path.join(S, "labels.before_model_fix.jsonl"))
         with open(os.path.join(S, "labels.jsonl"), "w") as f:
             for r in recs:
+                if r["step"] in excluded:
+                    r["exclude"] = "king/queen disagreement"
                 if r["step"] in fixes:
                     placement = placement_from_fen(r["placement"])
                     for q, c in fixes[r["step"]].items():
@@ -112,6 +120,9 @@ def main():
     ap.add_argument("--apply", action="store_true", help="rewrite labels.jsonl (with --rebuild-from)")
     ap.add_argument("--model", help="piece classifier (.onnx) to check the piece types")
     ap.add_argument("--fix", action="store_true", help="relabel what --model is sure about")
+    ap.add_argument("--exclude-missing", action="store_true",
+                    help="mark photos whose labelled move did not change the camera image "
+                         "(taken before the move) as excluded from training")
     args = ap.parse_args()
     if args.model:
         return check_with_model(os.path.expanduser(args.session), os.path.expanduser(args.model),
@@ -132,7 +143,7 @@ def main():
         scores.append((det.scores(ia, ib), det))
 
     if args.rebuild_from is None:
-        bad = 0
+        bad, missing_steps = 0, set()
         for i in range(1, len(photos)):
             if photos[i]["kind"] == "reset":
                 continue
@@ -141,12 +152,21 @@ def main():
             seen = {q for q in range(64) if s[q] > CHANGED}
             missing = {q for q in moved if s[q] <= CHANGED}
             extra = seen - moved - det.allowed(moved)
+            if missing:
+                missing_steps.add(photos[i]["step"])
             if missing or extra:
                 bad += 1
                 print(f"{photos[i]['image'][:5]} SUSPECT  label moves {names(moved)}, camera saw "
                       f"{names(seen)}  (missing {names(missing)}, extra {names(extra)}, "
                       f"trigger {photos[i].get('trigger', '?')})")
-        print(f"{len(photos)} photos, {bad} suspect")
+        print(f"{len(photos)} photos, {bad} suspect, {len(missing_steps)} with the move not visible")
+        if args.exclude_missing and missing_steps:
+            with open(os.path.join(S, "labels.jsonl"), "w") as f:
+                for r in recs:
+                    if r["step"] in missing_steps:
+                        r["exclude"] = "labelled move not visible"
+                    f.write(json.dumps(r) + "\n")
+            print(f"{len(missing_steps)} photos marked as excluded")
         return
 
     start = args.rebuild_from
