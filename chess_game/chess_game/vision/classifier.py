@@ -75,11 +75,16 @@ class SquareClassifier:
         self.net.setInput(blob)
         return self.net.forward()
 
-    def predict(self, crops):
+    def predict(self, crops, tta=True):
         """(N, 13) probabilities (temperature-calibrated if the model's
-        metadata has a temperature)."""
-        return softmax(np.asarray(self.logits(crops), np.float64) / self.temperature)
+        metadata has a temperature).  tta: also classify the mirrored crops
+        (the model was trained with mirroring) and average."""
+        p = softmax(np.asarray(self.logits(crops), np.float64) / self.temperature)
+        if tta:
+            flipped = [np.ascontiguousarray(c[:, ::-1]) for c in crops]
+            p = 0.5 * (p + softmax(np.asarray(self.logits(flipped), np.float64) / self.temperature))
+        return p
 
-    def classify(self, image, model):
+    def classify(self, image, model, tta=True):
         """Work-size BGR image + BoardModel -> (64, 13) probabilities."""
-        return self.predict(square_crops(image, model))
+        return self.predict(square_crops(image, model), tta)

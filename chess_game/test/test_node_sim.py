@@ -122,7 +122,8 @@ class World:
         return o
 
 
-def run_game(monkeypatch, seed, human_white, engine="random", max_plies=80, colour_only=False):
+def run_game(monkeypatch, seed, human_white, engine="random", max_plies=80, colour_only=False,
+             frames_per_read=1):
     install_stubs(monkeypatch)
     import cv2
     for mod in [m for m in sys.modules if m.startswith("chess_game.chess_node")]:
@@ -165,7 +166,7 @@ def run_game(monkeypatch, seed, human_white, engine="random", max_plies=80, colo
         def __init__(self, path):
             pass
 
-        def classify(self, image, model):
+        def classify(self, image, model, tta=True):
             return world.obs()
 
     monkeypatch.setattr(chess_node, "ChessCamera", FakeCamera)
@@ -176,10 +177,11 @@ def run_game(monkeypatch, seed, human_white, engine="random", max_plies=80, colo
     node._params = None
     node.stable_time = 0.0
     node.colour_only = colour_only
+    node.frames_per_read = frames_per_read
     node.engine = chess_node.create_engine(engine)
     node.engine.rng = random.Random(seed) if hasattr(node.engine, "rng") else None
 
-    def tick(n=3):
+    def tick(n=3 + 2 * frames_per_read):
         for _ in range(n):
             with node.lock:
                 node.latest = world.frame()
@@ -275,3 +277,8 @@ def test_colour_only_mode_still_follows_the_game(monkeypatch):
     node, world, _ = run_game(monkeypatch, 11, True, colour_only=True)
     assert node.obs.shape == (64, 3)
     assert len(node.game.board.move_stack) > 10
+
+
+def test_board_read_averages_several_still_frames(monkeypatch):
+    node, world, _ = run_game(monkeypatch, 21, True, max_plies=12, frames_per_read=3)
+    assert len(node.game.board.move_stack) >= 6

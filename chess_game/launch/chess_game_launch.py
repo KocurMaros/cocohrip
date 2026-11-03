@@ -31,6 +31,7 @@ def generate_launch_description():
                 'pieces_yaml': ParameterValue(LaunchConfiguration('pieces_yaml'), value_type=str),
                 'ai_time_limit': 2.0,     # s per robot move
                 'stable_time': 0.8,       # s the board must be still before it is read
+                'frames_per_read': 3,     # still frames averaged per board reading
                 # storage for captured pieces: one column left, one right of the board
                 'storage_left_col': -1.8,
                 'storage_right_col': 8.8,

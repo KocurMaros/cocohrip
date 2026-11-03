@@ -92,6 +92,9 @@ class ChessNode(Node):
         # recognised, but F (start from a position) and the setup's piece
         # types are not available
         p('colour_only', False)
+        # a board is read by averaging this many still frames (each one also
+        # classified mirrored) - one bad frame or glare spot cannot decide
+        p('frames_per_read', 3)
         p('storage_left_col', -1.8)
         p('storage_right_col', 8.8)
         p('storage_rows', 8)
@@ -159,6 +162,9 @@ class ChessNode(Node):
         self.obs = None                     # (64, 13) of the last settled board
         self.obs_time = 0.0
         self.force_check = False
+        self.frames_per_read = max(1, int(g('frames_per_read').value))
+        self._reads = []                    # probabilities of the current still period
+        self._reads_since = 0.0
         self.hands = mp.solutions.hands.Hands(max_num_hands=2, model_complexity=0) if mp else None
 
         self.banner = ("Set up the pieces (your colour on your side), then press S", "info")
@@ -220,14 +226,21 @@ class ChessNode(Node):
             self.last_hand = time.time()
 
         new_obs = False
+        if self._reads and self.last_motion > self._reads_since:
+            self._reads = []                # the board moved: start the reading again
         if self.classifier is not None and self._settled() and (
                 self.obs_time < self.last_motion or self.force_check):
-            self.force_check = False
-            self.obs = self.classifier.classify(work, self.model)
-            if self.colour_only:
-                self.obs = collapse_to_colour(self.obs)
-            self.obs_time = time.time()
-            new_obs = True
+            if not self._reads:
+                self._reads_since = time.time()
+            self._reads.append(self.classifier.classify(work, self.model))
+            if len(self._reads) >= self.frames_per_read:
+                self.force_check = False
+                self.obs = np.mean(self._reads, axis=0)
+                self._reads = []
+                if self.colour_only:
+                    self.obs = collapse_to_colour(self.obs)
+                self.obs_time = time.time()
+                new_obs = True
 
         key = cv2.waitKey(1) & 0xFF
         if key != 255:
