@@ -101,6 +101,9 @@ class Recorder:
             self.planner.after_empty_board()   # empty board recorded: set up the start next
         self.ref = None                    # work image of the last photo (change reference)
         self.retake = None                 # Instruction to re-photograph after U
+        if args.resume:                    # first make sure the board is where we left off
+            self.retake = Instruction("Resumed: make the board look exactly like the diagram, "
+                                      "then SPACE", dict(placement), dict(placement), kind="reset")
         self.threshold = args.threshold
         self.corners = None
         self.model = self.detector = None
@@ -110,6 +113,8 @@ class Recorder:
         self.still_since = time.time()
         self.last_check = 0.0
         self.match = False
+        self.matches = 0                   # consecutive checks that matched the instruction
+        self.moved = False                 # motion seen since the last photo
 
     # ------------------------------------------------------------ board
     def set_corners(self, corners):
@@ -155,11 +160,14 @@ class Recorder:
                 self.changed, scores = self.detector.changed(self.ref, work)
                 self.match, self.status = check_change(ins, self.changed,
                                                        self.detector.allowed(ins.changed))
+                self.matches = self.matches + 1 if self.match else 0
             elif ins.kind == "reset" or self.ref is None or self.retake is not None:
-                self.match, self.changed = False, []
+                self.match, self.changed, self.matches = False, [], 0
                 self.status = "press SPACE when the board looks like the diagram"
             still = now - self.still_since
-            auto = self.match and still >= STILL_S
+            # automatic photos only after the human moved something, and when
+            # two checks in a row agree (no photo from a single odd frame)
+            auto = self.match and self.matches >= 2 and self.moved and still >= STILL_S
             self.draw(work, ins, still)
             key = cv2.waitKey(1) & 0xFF
             if key in (27, ord('q'), ord('Q')):
@@ -209,6 +217,7 @@ class Recorder:
             moving = (cv2.absdiff(small, self.prev_small) > 25).mean() * 100 > 1.0
             if moving:
                 self.still_since = time.time()
+                self.moved = True
         self.prev_small = small
 
     # ------------------------------------------------------------ photos
@@ -243,6 +252,7 @@ class Recorder:
                 if k == 0:
                     self.ref = work_image(img)
         self.cam.set_exposure(base)
+        self.cam.grab_fresh(flush=3)      # frames still exposed with the bracket's last value
         self.last_files = files
         if self.retake is None:
             self.planner.accept()
@@ -250,6 +260,9 @@ class Recorder:
         self.planner.record(after)
         self.photos += 1
         self.prev_small = None
+        self.match, self.matches, self.moved = False, 0, False
+        self.still_since = time.time()
+        self.last_check = time.time()
         print(f"[{step:05d}] {ins.text}  ({len(after)} pieces, {self.lighting}, {base} us)")
         if self.photos % LIGHT_CHANGE_EVERY == 0:
             print("[lighting] time to change the lights - then press 1 / 2 / 3")
