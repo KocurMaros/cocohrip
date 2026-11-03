@@ -136,7 +136,7 @@ def collate(batch):
     return torch.cat(xs), torch.cat(ys), torch.cat(ids)
 
 
-AUGMENT = "strong"          # set from --aug
+AUGMENT = "basic"           # set from --aug
 
 
 def augment(crop):
@@ -334,7 +334,9 @@ def main():
     ap.add_argument("--init", help="start from this piece_classifier.pt (fine-tuning, e.g. a "
                                    "new piece set - use a lower --lr such as 1e-4)")
     ap.add_argument("--max-photos", type=int, help="use at most N photos (quick tests)")
-    ap.add_argument("--aug", choices=["strong", "basic"], default="strong")
+    # basic: in light the model has not seen, "strong" lost colour accuracy
+    # (unseen artificial light: colour boards 97.5 % basic vs 79.9 % strong)
+    ap.add_argument("--aug", choices=["strong", "basic"], default="basic")
     ap.add_argument("--holdout-lighting", help="validate on all photos of this lighting, train "
                                                "on the others (how well unseen light works)")
     ap.add_argument("--train-blocks", choices=["even", "odd"],
