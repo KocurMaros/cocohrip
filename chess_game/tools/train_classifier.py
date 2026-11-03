@@ -49,7 +49,7 @@ CALIB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "chess_ga
 # data
 # --------------------------------------------------------------------------
 
-def load_records(session_dirs, val_block=25, val_every=5):
+def load_records(session_dirs, val_block=25, val_every=5, lightings=None, holdout=None):
     """All photos of the sessions; split into train / val by blocks of
     `val_block` consecutive positions (every `val_every`-th block is val)."""
     train, val = [], []
@@ -63,6 +63,11 @@ def load_records(session_dirs, val_block=25, val_every=5):
                 continue
             r["path"] = os.path.join(d, r["image"])
             r["session"] = os.path.basename(os.path.normpath(d))
+            if holdout:                           # one lighting only for validation
+                (val if r["lighting"] == holdout else train).append(r)
+                continue
+            if lightings and r["lighting"] not in lightings:
+                continue
             (val if (r["step"] // val_block) % val_every == val_every - 1 else train).append(r)
     return train, val
 
@@ -126,7 +131,73 @@ def collate(batch):
     return torch.cat(xs), torch.cat(ys), torch.cat(ids)
 
 
+AUGMENT = "strong"          # set from --aug
+
+
 def augment(crop):
+    return augment_strong(crop) if AUGMENT == "strong" else augment_basic(crop)
+
+
+def _soft_mask(h, w):
+    """Random soft-edged blob or band (0..1) - a shadow or a glare patch."""
+    m = np.zeros((h, w), np.float32)
+    if random.random() < 0.5:                       # ellipse (hand / arm shadow)
+        c = (random.randint(-w // 4, w + w // 4), random.randint(-h // 4, h + h // 4))
+        axes = (random.randint(w // 4, w), random.randint(h // 6, h // 2))
+        cv2.ellipse(m, c, axes, random.uniform(0, 180), 0, 360, 1.0, -1)
+    else:                                           # straight-edged band
+        pts = np.array([(random.randint(-w, 2 * w), random.randint(-h, 2 * h)) for _ in range(4)])
+        cv2.fillConvexPoly(m, cv2.convexHull(pts.astype(np.int32)), 1.0)
+    k = random.choice((9, 15, 25)) | 1
+    return cv2.GaussianBlur(m, (k, k), 0)
+
+
+def augment_strong(crop):
+    """augment_basic plus what a real game brings: shadows of hands / the
+    robot arm, glare, colour temperature, low light noise, (motion) blur,
+    JPEG artefacts, larger corner / piece-position errors."""
+    img = crop.astype(np.float32) / 255.0
+    h, w = img.shape[:2]
+    if random.random() < 0.9:                       # geometry
+        ang = random.uniform(-10, 10)
+        sc = random.uniform(0.85, 1.15)
+        M = cv2.getRotationMatrix2D((w / 2, h * 0.7), ang, sc)
+        M[:, 2] += (random.uniform(-7, 7), random.uniform(-7, 7))
+        img = cv2.warpAffine(img, M, (w, h), borderMode=cv2.BORDER_REPLICATE)
+    if random.random() < 0.5:
+        img = img[:, ::-1]
+    img = img * np.exp(random.gauss(0, 0.35))                           # exposure
+    img = (img - 0.5) * np.exp(random.gauss(0, 0.2)) + 0.5              # contrast
+    warm = random.gauss(0, 0.08)                                        # colour temperature
+    img = img * np.array([np.exp(-warm), 1.0, np.exp(warm)], np.float32)
+    img = img * np.exp(np.random.normal(0, 0.05, 3)).astype(np.float32)  # white balance
+    if random.random() < 0.4:                                           # shadow
+        m = _soft_mask(h, w)[..., None]
+        img = img * (1 - m * random.uniform(0.3, 0.7))
+    if random.random() < 0.15:                                          # glare
+        m = _soft_mask(h, w)[..., None]
+        img = img + m * random.uniform(0.2, 0.6)
+    img = np.clip(img, 0, 1) ** np.exp(random.gauss(0, 0.25))           # gamma
+    if random.random() < 0.3:                                           # defocus / motion blur
+        if random.random() < 0.5:
+            k = random.choice((3, 5, 7))
+            img = cv2.GaussianBlur(img, (k, k), 0)
+        else:
+            k = random.choice((5, 7, 9))
+            kern = np.zeros((k, k), np.float32)
+            kern[k // 2] = 1.0 / k
+            R = cv2.getRotationMatrix2D((k / 2 - 0.5, k / 2 - 0.5), random.uniform(0, 180), 1)
+            img = cv2.filter2D(img, -1, cv2.warpAffine(kern, R, (k, k)))
+    if random.random() < 0.5:                                           # sensor noise
+        img = img + np.random.normal(0, random.uniform(0.005, 0.06), img.shape).astype(np.float32)
+    out = (np.clip(img, 0, 1) * 255).astype(np.uint8)
+    if random.random() < 0.3:                                           # JPEG artefacts
+        ok, buf = cv2.imencode(".jpg", out, [cv2.IMWRITE_JPEG_QUALITY, random.randint(35, 90)])
+        out = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+    return out
+
+
+def augment_basic(crop):
     """Lighting (exposure, contrast, gamma, white balance, noise, blur) and
     small geometric jitter (board corners / piece off-centre)."""
     img = crop.astype(np.float32) / 255.0
@@ -258,12 +329,20 @@ def main():
     ap.add_argument("--init", help="start from this piece_classifier.pt (fine-tuning, e.g. a "
                                    "new piece set - use a lower --lr such as 1e-4)")
     ap.add_argument("--max-photos", type=int, help="use at most N photos (quick tests)")
+    ap.add_argument("--aug", choices=["strong", "basic"], default="strong")
+    ap.add_argument("--holdout-lighting", help="validate on all photos of this lighting, train "
+                                               "on the others (how well unseen light works)")
+    ap.add_argument("--corner-jitter", type=float, default=4.0,
+                    help="random error of the board corners when training [px]")
     ap.add_argument("--val-block", type=int, default=25,
                     help="every 5th block of this many consecutive positions is validation")
     args = ap.parse_args()
 
     sessions = sorted({p for s in args.sessions for p in glob.glob(os.path.expanduser(s))})
-    train_recs, val_recs = load_records(sessions, val_block=args.val_block)
+    global AUGMENT
+    AUGMENT = args.aug
+    train_recs, val_recs = load_records(sessions, val_block=args.val_block,
+                                        holdout=args.holdout_lighting)
     if args.max_photos:
         train_recs, val_recs = train_recs[:args.max_photos], val_recs[:max(1, args.max_photos // 4)]
     if not train_recs or not val_recs:
@@ -287,7 +366,9 @@ def main():
         model.load_state_dict(torch.load(os.path.expanduser(args.init), map_location="cpu"))
         print(f"fine-tuning from {args.init}")
     model = model.to(device)
-    train_dl = torch.utils.data.DataLoader(PhotoSquares(train_recs, True), args.photos_per_batch,
+    train_dl = torch.utils.data.DataLoader(PhotoSquares(train_recs, True,
+                                                        corner_jitter=args.corner_jitter),
+                                           args.photos_per_batch,
                                            shuffle=True, num_workers=args.workers, collate_fn=collate,
                                            persistent_workers=args.workers > 0, drop_last=True)
     val_dl = torch.utils.data.DataLoader(PhotoSquares(val_recs, False), args.photos_per_batch,

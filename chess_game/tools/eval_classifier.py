@@ -37,6 +37,7 @@ def main():
     ap.add_argument("model")
     ap.add_argument("sessions", nargs="+")
     ap.add_argument("--show", action="store_true", help="save crops of wrong squares")
+    ap.add_argument("--lighting", help="only photos of this lighting")
     ap.add_argument("--val-only", action="store_true",
                     help="only the photos train_classifier.py held out for validation "
                          "(every 5th block of 25 positions) - honest numbers")
@@ -54,6 +55,8 @@ def main():
             if rec.get("exclude"):
                 continue
             if args.val_only and (rec["step"] // 25) % 5 != 4:
+                continue
+            if args.lighting and rec["lighting"] != args.lighting:
                 continue
             img = cv2.imread(os.path.join(d, rec["image"]), cv2.IMREAD_REDUCED_COLOR_2)
             if img is None:
