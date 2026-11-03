@@ -19,7 +19,8 @@ board (empty / start position) always waits for SPACE.
 Keys:  SPACE  take the photos now (also: confirm a reset)
        N      skip this instruction (e.g. a piece is missing)
        U      the last photos were wrong: delete them, fix the board, SPACE
-       L      next lighting tag (do this whenever you change the lights)
+       1 2 3  lighting tag: 1 normal, 2 dark, 3 bright (set it whenever you
+              change the lights - it only labels the photos)
        E      auto-exposure now        B  re-detect the board corners
        + / -  change-detection threshold        Q / ESC  quit (resume later)
 
@@ -80,11 +81,11 @@ class Recorder:
             labels = read_labels(os.path.join(self.dir, "labels.jsonl"))
             placement = placement_from_fen(labels[-1]["placement"]) if labels else {}
             self.photos = len({r["step"] for r in labels})
-            self.lighting = labels[-1]["lighting"] if labels else args.lighting
+            self.lighting = args.lighting or (labels[-1]["lighting"] if labels else "normal")
         else:
             self.dir = os.path.join(os.path.expanduser(args.out), time.strftime("%Y%m%d_%H%M%S"))
             os.makedirs(self.dir)
-            labels, placement, self.photos, self.lighting = [], {}, 0, args.lighting
+            labels, placement, self.photos, self.lighting = [], {}, 0, args.lighting or "normal"
         self.labels_path = os.path.join(self.dir, "labels.jsonl")
         with open(os.path.join(self.dir, "session.json"), "w") as f:
             json.dump({"camera": self.cam.serial, "full_size": self.full_size,
@@ -94,8 +95,10 @@ class Recorder:
         for r in labels:
             if r["image"].endswith("_e0.jpg"):
                 self.planner.record(placement_from_fen(r["placement"]))
-        if args.resume:
+        if args.resume and placement:
             self.planner.skip()            # continue scattering from the stored position
+        elif args.resume:
+            self.planner.after_empty_board()   # empty board recorded: set up the start next
         self.ref = None                    # work image of the last photo (change reference)
         self.retake = None                 # Instruction to re-photograph after U
         self.threshold = args.threshold
@@ -167,9 +170,11 @@ class Recorder:
                 self.planner.skip()
             elif key in (ord('u'), ord('U')):
                 self.undo()
-            elif key in (ord('l'), ord('L')):
-                self.lighting = LIGHTINGS[(LIGHTINGS.index(self.lighting) + 1) % len(LIGHTINGS)
-                                          if self.lighting in LIGHTINGS else 0]
+            elif key in (ord('1'), ord('2'), ord('3')):
+                new = LIGHTINGS[key - ord('1')]
+                if new == self.lighting:
+                    continue                # key repeat / pressed again: nothing to do
+                self.lighting = new
                 print(f"[lighting] {self.lighting}")
                 self.ref = None       # everything looks different now: next photo by SPACE
                 self.cam.auto_expose(measure=self._board_level)
@@ -247,7 +252,7 @@ class Recorder:
         self.prev_small = None
         print(f"[{step:05d}] {ins.text}  ({len(after)} pieces, {self.lighting}, {base} us)")
         if self.photos % LIGHT_CHANGE_EVERY == 0:
-            print("[lighting] time to change the lights - then press L")
+            print("[lighting] time to change the lights - then press 1 / 2 / 3")
 
     def undo(self):
         files = getattr(self, "last_files", None)
@@ -289,7 +294,7 @@ class Recorder:
         canvas[:h, :cam.shape[1]] = cam
         canvas[10:10 + diag.shape[0], cam.shape[1] + 20:cam.shape[1] + 20 + diag.shape[1]] = diag
         x0 = cam.shape[1] + 24
-        info = [f"photos: {self.photos}   lighting: {self.lighting} (L)",
+        info = [f"photos: {self.photos}   lighting: {self.lighting.upper()} (1 normal 2 dark 3 bright)",
                 f"exposure: {self.cam.exposure_us / 1000:.0f} ms +{self.cam.gain_db:.0f} dB   threshold: {self.threshold:.1f} (+/-)",
                 f"seen piece/square pairs: {len(self.planner.coverage)} / 768",
                 f"still: {min(still, 9.9):.1f} s"]
@@ -305,7 +310,7 @@ class Recorder:
             cv2.putText(canvas, "  ".join(ins.lines), (12, h + 115), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
                         (180, 180, 180), 1, cv2.LINE_AA)
         if self.photos and self.photos % LIGHT_CHANGE_EVERY == 0:
-            cv2.putText(canvas, "Change the lighting now, then press L", (12, h + 140),
+            cv2.putText(canvas, "Change the lighting now, then press 1 / 2 / 3", (12, h + 140),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 140, 255), 2, cv2.LINE_AA)
         cv2.imshow(WIN, canvas)
 
@@ -314,8 +319,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out", default="~/chess_dataset")
     ap.add_argument("--resume", help="session directory to continue")
-    ap.add_argument("--lighting", default="normal", choices=LIGHTINGS,
-                    help="tag stored with every photo (L cycles it)")
+    ap.add_argument("--lighting", choices=LIGHTINGS,
+                    help="tag stored with every photo (keys 1/2/3 change it); default normal, "
+                         "or the last one of a resumed session")
     ap.add_argument("--a1-corner", default="BR", choices=["BL", "TL", "TR", "BR"],
                     help="raw-image corner of printed a1 (BR for the cell's camera)")
     ap.add_argument("--manual", action="store_true", help="click the board corners")

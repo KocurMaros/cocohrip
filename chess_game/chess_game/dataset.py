@@ -118,6 +118,12 @@ class DatasetPlanner:
         """(logical board, human_white) of the game being replayed, or None."""
         return (self._board, self._human_white) if self._board is not None else None
 
+    def after_empty_board(self):
+        """The empty board is recorded: the next instruction sets up a start
+        position (used when resuming a session)."""
+        self._queue.clear()
+        self._phase = "reset-empty"
+
     def skip(self):
         """Drop the current instruction (e.g. a piece is missing)."""
         self._queue.clear()
