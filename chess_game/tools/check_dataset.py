@@ -54,7 +54,7 @@ def names(squares):
     return ",".join(chess.square_name(q) for q in sorted(squares)) or "-"
 
 
-def check_with_model(S, model_path, fix):
+def check_with_model(S, model_path, fix, blocks=None):
     from chess_game.game import CLASSES
     from chess_game.vision.classifier import SquareClassifier, square_crops
     clf = SquareClassifier(model_path)
@@ -65,6 +65,10 @@ def check_with_model(S, model_path, fix):
     intr = None
     fixes, excluded = {}, set()
     for step, group in sorted(by_step.items()):
+        if blocks and ((step // 25) % 2 == 1) != (blocks == "odd"):
+            continue
+        if all(r.get("exclude") for r in group):
+            continue
         placement = placement_from_fen(group[0]["placement"])
         labels = np.array([CLASSES.index(placement[q]) if q in placement else 0 for q in range(64)])
         seen_all = []
@@ -120,13 +124,16 @@ def main():
     ap.add_argument("--apply", action="store_true", help="rewrite labels.jsonl (with --rebuild-from)")
     ap.add_argument("--model", help="piece classifier (.onnx) to check the piece types")
     ap.add_argument("--fix", action="store_true", help="relabel what --model is sure about")
+    ap.add_argument("--blocks", choices=["even", "odd"],
+                    help="with --model: only check these blocks of 25 positions (the ones the "
+                         "model was not trained on)")
     ap.add_argument("--exclude-missing", action="store_true",
                     help="mark photos whose labelled move did not change the camera image "
                          "(taken before the move) as excluded from training")
     args = ap.parse_args()
     if args.model:
         return check_with_model(os.path.expanduser(args.session), os.path.expanduser(args.model),
-                                args.fix)
+                                args.fix, args.blocks)
     S = os.path.expanduser(args.session)
     recs = read_labels(os.path.join(S, "labels.jsonl"))
     photos = [r for r in recs if r["image"].endswith("_e0.jpg")]

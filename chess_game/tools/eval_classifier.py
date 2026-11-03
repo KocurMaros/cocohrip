@@ -86,7 +86,8 @@ def main():
                 labels = [f"{CLASSES[truth[s]]}>{CLASSES[pred[s]]}" if not ok[s] else "" for s in range(64)]
                 cv2.imwrite(os.path.join(err_dir, f"{os.path.basename(d)}_{rec['image']}"),
                             contact_sheet(bad, labels))
-            if rec.get("uci"):
+            # (a corrected label no longer matches the move the instruction asked for)
+            if rec.get("uci") and not (rec.get("model_fixed") or rec.get("relabelled_from")):
                 game = ChessGame()
                 game.start(rec["fen_before"], human_white=rec["human_white"])
                 inf = game.infer_move(probs)                    # either side's move

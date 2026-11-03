@@ -49,7 +49,8 @@ CALIB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "chess_ga
 # data
 # --------------------------------------------------------------------------
 
-def load_records(session_dirs, val_block=25, val_every=5, lightings=None, holdout=None):
+def load_records(session_dirs, val_block=25, val_every=5, lightings=None, holdout=None,
+                 train_blocks=None):
     """All photos of the sessions; split into train / val by blocks of
     `val_block` consecutive positions (every `val_every`-th block is val)."""
     train, val = [], []
@@ -65,6 +66,10 @@ def load_records(session_dirs, val_block=25, val_every=5, lightings=None, holdou
             r["session"] = os.path.basename(os.path.normpath(d))
             if holdout:                           # one lighting only for validation
                 (val if r["lighting"] == holdout else train).append(r)
+                continue
+            if train_blocks:                      # cross-check: train on even / odd blocks
+                odd = (r["step"] // val_block) % 2 == 1
+                (train if odd == (train_blocks == "odd") else val).append(r)
                 continue
             if lightings and r["lighting"] not in lightings:
                 continue
@@ -332,6 +337,9 @@ def main():
     ap.add_argument("--aug", choices=["strong", "basic"], default="strong")
     ap.add_argument("--holdout-lighting", help="validate on all photos of this lighting, train "
                                                "on the others (how well unseen light works)")
+    ap.add_argument("--train-blocks", choices=["even", "odd"],
+                    help="train on the even / odd blocks of 25 positions only, validate on "
+                         "the others (cross-checking labels)")
     ap.add_argument("--corner-jitter", type=float, default=4.0,
                     help="random error of the board corners when training [px]")
     ap.add_argument("--val-block", type=int, default=25,
@@ -342,7 +350,8 @@ def main():
     global AUGMENT
     AUGMENT = args.aug
     train_recs, val_recs = load_records(sessions, val_block=args.val_block,
-                                        holdout=args.holdout_lighting)
+                                        holdout=args.holdout_lighting,
+                                        train_blocks=args.train_blocks)
     if args.max_photos:
         train_recs, val_recs = train_recs[:args.max_photos], val_recs[:max(1, args.max_photos // 4)]
     if not train_recs or not val_recs:
