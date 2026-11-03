@@ -166,30 +166,30 @@ def augment_strong(crop):
         img = cv2.warpAffine(img, M, (w, h), borderMode=cv2.BORDER_REPLICATE)
     if random.random() < 0.5:
         img = img[:, ::-1]
-    img = img * np.exp(random.gauss(0, 0.35))                           # exposure
-    img = (img - 0.5) * np.exp(random.gauss(0, 0.2)) + 0.5              # contrast
-    warm = random.gauss(0, 0.08)                                        # colour temperature
+    img = img * np.exp(random.gauss(0, 0.3))                            # exposure
+    img = (img - 0.5) * np.exp(random.gauss(0, 0.15)) + 0.5             # contrast
+    warm = random.gauss(0, 0.05)                                        # colour temperature
     img = img * np.array([np.exp(-warm), 1.0, np.exp(warm)], np.float32)
-    img = img * np.exp(np.random.normal(0, 0.05, 3)).astype(np.float32)  # white balance
+    img = img * np.exp(np.random.normal(0, 0.03, 3)).astype(np.float32)  # white balance
     if random.random() < 0.4:                                           # shadow
         m = _soft_mask(h, w)[..., None]
-        img = img * (1 - m * random.uniform(0.3, 0.7))
+        img = img * (1 - m * random.uniform(0.25, 0.6))
     if random.random() < 0.15:                                          # glare
         m = _soft_mask(h, w)[..., None]
-        img = img + m * random.uniform(0.2, 0.6)
+        img = img + m * random.uniform(0.15, 0.4)
     img = np.clip(img, 0, 1) ** np.exp(random.gauss(0, 0.25))           # gamma
     if random.random() < 0.3:                                           # defocus / motion blur
         if random.random() < 0.5:
             k = random.choice((3, 5, 7))
             img = cv2.GaussianBlur(img, (k, k), 0)
         else:
-            k = random.choice((5, 7, 9))
+            k = random.choice((3, 5, 7))
             kern = np.zeros((k, k), np.float32)
             kern[k // 2] = 1.0 / k
             R = cv2.getRotationMatrix2D((k / 2 - 0.5, k / 2 - 0.5), random.uniform(0, 180), 1)
             img = cv2.filter2D(img, -1, cv2.warpAffine(kern, R, (k, k)))
     if random.random() < 0.5:                                           # sensor noise
-        img = img + np.random.normal(0, random.uniform(0.005, 0.06), img.shape).astype(np.float32)
+        img = img + np.random.normal(0, random.uniform(0.005, 0.04), img.shape).astype(np.float32)
     out = (np.clip(img, 0, 1) * 255).astype(np.uint8)
     if random.random() < 0.3:                                           # JPEG artefacts
         ok, buf = cv2.imencode(".jpg", out, [cv2.IMWRITE_JPEG_QUALITY, random.randint(35, 90)])
