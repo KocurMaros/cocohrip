@@ -10,13 +10,12 @@ Branch `feat/chess`. On the robot PC it lives in its own workspace,
 | ROS node + dashboard (`chess_node.py`) | done, simulated games pass; not run on the cell yet |
 | robot_control executor (`/chess/robot_move`) | done, verified on mock hardware |
 | piece sizes (`config/pieces.yaml`) | measured with the gripper, lift-tested |
-| piece classifier (`vision/classifier.py`, `tools/train_classifier.py`) | pipeline verified on the robot PC GPU; **needs the dataset** |
-| dataset recorder (`tools/capture_dataset.py`) | ready, waiting for the recording session |
+| piece classifier (`vision/classifier.py`, `tools/train_classifier.py`) | `final_v1`: every square right on 225 held-out photos (dark / normal / bright) |
+| dataset (`tools/capture_dataset.py`) | recorded 2026-11-03: 459 positions x 3 exposures, labels cleaned |
 
 ### Still to do for a stable version
 
-1. Record the dataset (dark / normal / bright), train, check with
-   `eval_classifier` (target: >= 99.5 % of moves recognised).
+1. First game on the cell with the node and `final_v1`.
 2. First robot moves on the cell: squares, storage slots left/right of the
    board (free, reachable), place accuracy, travel height.
 3. Full games on the cell: captures, castling, en passant, promotion marker,

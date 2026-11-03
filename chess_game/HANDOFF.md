@@ -1,4 +1,4 @@
-# Chess: handoff (2026-10-30)
+# Chess: handoff (updated 2026-11-03)
 
 Goal: the checkers app, but chess. The human plays against the UR5e with a
 Hand-E gripper; a Ximea camera reads the board. Branch **`feat/chess`**
@@ -32,17 +32,28 @@ Done and verified:
   live. Training, ONNX export and OpenCV inference run on the robot PC (RTX
   2060) with fake data.
 
-Not done yet: the classifier has **no real training data**, so the node
-cannot play yet. The chess node has never run on the cell, and no chess move
+* **Dataset** (2026-11-03, cell camera): `~/chess_dataset/20261103_130455` on
+  the robot PC, a copy on the laptop that ran the session
+  (`~/chess_dataset_backup/`). 459 positions x 3 exposures = 1,377 photos,
+  1.0 GB: dark 169, normal 141, bright 149 positions (the bright ones are
+  under artificial light). Labels were cleaned with `tools/check_dataset.py`
+  (rebuilt runs of photos taken before the move, model-based fixes).
+  `labels.before_*.jsonl` are the backups of each step.
+* **Piece classifier `final_v1`**: ResNet18, `~/chess_models/final_v1`
+  (`~/chess_models/latest` points to it), 45 MB, not in git. On the 225
+  held-out photos it got **every square right** in all three lightings. It
+  recognised **all 117 held-out game moves**, not counting 4 positions where
+  the human made the move wrongly. Temperature set to 1.0 (the fit collapsed
+  on a perfect validation set; `train_classifier.py` now clamps it).
+
+Not done yet: the chess node has never run on the cell, and no chess move
 has been executed by the real robot.
 
 ## Next steps (in order)
 
-1. **Dataset** (needs a person at the board, ~1.5 h): `tools/capture_dataset.py`
-   in three lightings (`--lighting normal`, then L for dark and bright), about 300
-   positions each. Then `train_classifier.py` in `~/chess_venv` and
-   `eval_classifier.py`. Target: >= 99.5 % of moves recognised. Commands are in
-   the README.
+1. **First game on the cell**: `ros2 launch chess_game chess_game_launch.py` (it
+   loads `~/chess_models/latest`). Check move recognition live, with hands and
+   lighting changes.
 2. **Robot on the cell**: start bringup and `robot_control` from `~/chess_ws`
    (only that build has `/chess/robot_move`). Send single moves first and check
    the squares, storage slots (one column left, one right of the board), placing
@@ -81,7 +92,17 @@ has been executed by the real robot.
   queen (55 mm) must be gripped high. `pieces.yaml` takes care of it; the robot's
   old fixed `z_attach` would crash into them.
 * **Ximea**: after a reboot it sometimes gives no frames until
-  `/opt/XIMEA/bin/xiSample` has run once. `ChessCamera` retries.
+  `/opt/XIMEA/bin/xiSample` has run once. `ChessCamera` retries. It must sit
+  on a **USB 3** port: at USB 2 (`lsusb -t` shows 480M) it delivers no
+  frames.
+* **Dataset recording lessons**: a capture done the wrong way round, or a
+  wrong piece from the box, is invisible to the change detection. The live
+  check with a trained model (`--check-model`) catches most of them, but its
+  king/queen opinions in new light are unreliable. SPACE pressed during the
+  photos used to label the board as the next position (fixed).
+* **Retraining**: `bash tools/train_pipeline.sh <session> <name>` (clean,
+  train, held-out evaluation); for a new piece set see
+  [docs/NEW_PIECE_SET.md](docs/NEW_PIECE_SET.md).
 * **Tracked pycache**: `checkers_game/.../camera/__pycache__/*.pyc` is tracked
   in git and changes whenever tests import checkers_game. Don't commit it.
 * **Plain-text token**: the robot PC's `~/checkers_ws/src` remote `upstream` has
