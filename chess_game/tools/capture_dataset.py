@@ -49,6 +49,8 @@ from chess_game.ui.diagram import draw_diagram  # noqa: E402
 from chess_game.vision.board_model import BoardModel, load_intrinsics  # noqa: E402
 from chess_game.vision.board_setup import click_corners, find_board_corners, locate  # noqa: E402
 from chess_game.vision.camera import ImageFolderCamera, to_display, white_level  # noqa: E402
+from chess_game.game import CLASSES  # noqa: E402
+from chess_game.vision.classifier import SquareClassifier, square_crops  # noqa: E402
 
 WIN = "Chess dataset"
 CALIB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "chess_game", "vision",
@@ -107,6 +109,11 @@ class Recorder:
             self.retake = Instruction("Resumed: make the board look exactly like the diagram, "
                                       "then SPACE", dict(placement), dict(placement), kind="reset")
         self.threshold = args.threshold
+        # a trained piece classifier checks every photo against its label
+        # (catches a queen placed instead of a rook, a black pawn for a white one)
+        self.checker = SquareClassifier(os.path.expanduser(args.check_model)) \
+            if args.check_model and os.path.exists(os.path.expanduser(args.check_model)) else None
+        self.warning = ""
         self.corners = None
         self.model = self.detector = None
         self.status = ""
@@ -279,6 +286,7 @@ class Recorder:
                 f.write(json.dumps(rec) + "\n")
         self.ref = first
         self.last_files = files
+        self.warning = self._check_label(first, after) if self.checker is not None else ""
         if self.retake is None:
             self.planner.accept()
         self.retake = None
@@ -294,6 +302,21 @@ class Recorder:
         print(f"[{step:05d}] {ins.text}  ({len(after)} pieces, {self.lighting}, {base} us)")
         if self.photos % LIGHT_CHANGE_EVERY == 0:
             print("[lighting] time to change the lights - then press 1 / 2 / 3")
+
+    def _check_label(self, image, placement):
+        """Squares where the classifier is sure the photo shows something
+        else than the label - returns the warning text ('' = fine)."""
+        probs = self.checker.predict(square_crops(image, self.model))
+        bad = []
+        for sq in range(64):
+            label = CLASSES.index(placement[sq]) if sq in placement else 0
+            seen = int(np.argmax(probs[sq]))
+            if seen != label and probs[sq, seen] > 0.9 and probs[sq, label] < 0.05:
+                bad.append(f"{chess.square_name(sq)}: {_piece_text(seen)}, not {_piece_text(label)}")
+        if not bad:
+            return ""
+        print("[check] " + "; ".join(bad))
+        return "CHECK " + "; ".join(bad[:3]) + "  -> fix the board, then U"
 
     def undo(self):
         files = getattr(self, "last_files", None)
@@ -347,13 +370,24 @@ class Recorder:
                     (255, 255, 255), 2, cv2.LINE_AA)
         cv2.putText(canvas, banner or self.status, (12, h + 80), cv2.FONT_HERSHEY_SIMPLEX, 0.75,
                     (0, 0, 255) if banner else colour, 2, cv2.LINE_AA)
-        if ins.lines:
+        if self.warning:
+            cv2.putText(canvas, self.warning, (12, h + 115), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                        (0, 0, 255), 2, cv2.LINE_AA)
+        elif ins.lines:
             cv2.putText(canvas, "  ".join(ins.lines), (12, h + 115), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
                         (180, 180, 180), 1, cv2.LINE_AA)
         if self.photos and self.photos % LIGHT_CHANGE_EVERY == 0:
             cv2.putText(canvas, "Change the lighting now, then press 1 / 2 / 3", (12, h + 140),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 140, 255), 2, cv2.LINE_AA)
         cv2.imshow(WIN, canvas)
+
+
+def _piece_text(c):
+    if c == 0:
+        return "empty"
+    sym = CLASSES[c]
+    return ("white " if sym.isupper() else "black ") + \
+        {"p": "pawn", "n": "knight", "b": "bishop", "r": "rook", "q": "queen", "k": "king"}[sym.lower()]
 
 
 def main():
@@ -369,6 +403,8 @@ def main():
     ap.add_argument("--threshold", type=float, default=9.0,
                     help="change score of a moved square (noise on a still board: ~4)")
     ap.add_argument("--seed", type=int)
+    ap.add_argument("--check-model", default="~/chess_models/latest/piece_classifier.onnx",
+                    help="classifier that checks every photo against its label (if it exists)")
     ap.add_argument("--replay", nargs="+", help="JPEGs instead of the camera ('.' = next image)")
     args = ap.parse_args()
     if args.replay and len(args.replay) == 1 and os.path.isdir(args.replay[0]):
