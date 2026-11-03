@@ -256,7 +256,7 @@ class ChangeDetector:
     the squares their projected column passes over - `allowed()` adds those
     for the expected squares."""
 
-    def __init__(self, board_model, image_shape, shrink=0.35, threshold=14.0):
+    def __init__(self, board_model, image_shape, shrink=0.35, threshold=9.0):
         import cv2
         self.cv2 = cv2
         self.model = board_model

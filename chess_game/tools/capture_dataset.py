@@ -349,7 +349,8 @@ def main():
     ap.add_argument("--a1-corner", default="BR", choices=["BL", "TL", "TR", "BR"],
                     help="raw-image corner of printed a1 (BR for the cell's camera)")
     ap.add_argument("--manual", action="store_true", help="click the board corners")
-    ap.add_argument("--threshold", type=float, default=14.0)
+    ap.add_argument("--threshold", type=float, default=9.0,
+                    help="change score of a moved square (noise on a still board: ~4)")
     ap.add_argument("--seed", type=int)
     ap.add_argument("--replay", nargs="+", help="JPEGs instead of the camera ('.' = next image)")
     args = ap.parse_args()
