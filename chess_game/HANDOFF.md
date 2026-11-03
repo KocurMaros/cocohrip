@@ -40,19 +40,31 @@ Done and verified:
   under artificial light). Labels were cleaned with `tools/check_dataset.py`
   (rebuilt runs of photos taken before the move, model-based fixes).
   `labels.before_*.jsonl` are the backups of each step.
-* **Piece classifier `final_v1`**: ResNet18, `~/chess_models/final_v1`
-  (`~/chess_models/latest` points to it), 45 MB, not in git. On the 225
-  held-out photos it got **every square right** in all three lightings. It
-  recognised **all 117 held-out game moves**, not counting 4 positions where
-  the human made the move wrongly. Temperature set to 1.0 (the fit collapsed
-  on a perfect validation set; `train_classifier.py` now clamps it).
+* **Piece classifier**: `~/chess_models/latest` -> `final_v1` (ResNet18, basic
+  augmentation, 45 MB, not in git, also backed up on the session laptop). On
+  the held-out photos every square is right.
+  * `final_v2` (cross-checked labels, strong augmentation): every square's
+    colour right and 100 % of held-out moves recognised, but in light it has
+    never seen the strong augmentation loses colour accuracy.
+  * `final_v3` (cross-checked labels + basic augmentation) was training at the
+    end of 2026-11-03: `~/chess_models/final_v3`, log `~/chess_final_v3.log`.
+    If it finished and its `--val-only` numbers are at least `final_v2`'s, point
+    `latest` at it.
+* **Robustness in light the model never saw** (leave-one-lighting-out,
+  `tools/lighting_test.sh`): squares 98.7-99.7 %, but almost all errors are
+  piece types within one colour. Empty / white / black stays at 99.76-99.96 %.
+  That is why the node matches moves on colours (`match_on_colours`, default)
+  and reads every board from 3 frames, each also mirrored. Matching on colours
+  recognised 100 % of the moves in unseen artificial light (50 % with piece
+  types).
 
 Not done yet: the chess node has never run on the cell, and no chess move
 has been executed by the real robot.
 
 ## Next steps (in order)
 
-1. **First game on the cell**: `ros2 launch chess_game chess_game_launch.py` (it
+0. Check `~/chess_final_v3.log`; switch `latest` to `final_v3` if it is good.
+1. **First game on the cell** (see [docs/STARTUP.md](docs/STARTUP.md)): `ros2 launch chess_game chess_game_launch.py` (it
    loads `~/chess_models/latest`). Check move recognition live, with hands and
    lighting changes.
 2. **Robot on the cell**: start bringup and `robot_control` from `~/chess_ws`
@@ -63,6 +75,9 @@ has been executed by the real robot.
    hands over the board, lighting changes, failed grips.
 4. Piece centring from the camera (`PickPlace.offset_*` is always 0 now).
 5. Gripper rotation by the direction the knight's head faces (asked for by the user).
+5b. **Learn from real games**: save the photos of positions the game confirmed
+   (the labels come free from the game state) and retrain now and then. The
+   model then adapts to new light without a recording session.
 6. **Player colour**: it must follow from where the pieces stand. That is
    implemented: S detects the colour on the human's side (black = the robot
    starts), and C picks it for F. Check it on the cell with both set-ups.
