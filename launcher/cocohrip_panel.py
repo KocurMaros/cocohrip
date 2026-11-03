@@ -7,6 +7,7 @@ stops everything again.
     cocohrip_panel.py chess | checkers     the desktop icons
     cocohrip_panel.py --stop-all            the "Stop robot apps" icon
 
+The window uses CustomTkinter (installed by launcher/install.sh).
 Start it through the wrapper `cocohrip-panel`, which gives it a clean ROS
 environment (ROS + the game's workspace only).  Each part runs in its own
 process group with its output in ~/.cocohrip/logs/<game>_<part>.log, and
@@ -454,16 +455,117 @@ class Failed(Exception):
     pass
 
 
-COL = {"ok": "#27ae60", "wait": "#e67e22", "bad": "#c0392b", "off": "#95a5a6",
-       "info": "#2f6fb0", "action": "#d35400", "error": "#c0392b", "done": "#27ae60"}
+# dark theme
+BG, CARD, CARD2, LINE = "#0f1216", "#181c22", "#232932", "#2d343e"
+TEXT, MUTED, FAINT = "#e8eaed", "#8b949e", "#5b636e"
+GREEN, GREEN_HI = "#238636", "#2ea043"
+RED, RED_HI = "#da3633", "#f85149"
+AMBER, BLUE = "#d29922", "#4493f8"
+KIND = {"info": BLUE, "action": AMBER, "done": GREEN_HI, "error": RED_HI, "idle": FAINT}
+SPIN = "◐◓◑◒"
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+SHORT = {"builtin": "Simple", "maia": "Maia", "stockfish": "Stockfish", "leela": "Leela"}
+ABOUT = {"builtin": "small built-in search - for beginners",
+         "maia": "plays like a human of this rating",
+         "stockfish": "classic engine, calibrated strength",
+         "leela": "neural network - very strong"}
+FONTS = ("Ubuntu", "Inter", "Cantarell", "Noto Sans", "DejaVu Sans")
+MONO = ("Ubuntu Mono", "DejaVu Sans Mono", "Noto Sans Mono")
+
+
+def _family(candidates):
+    import tkinter.font as tkfont
+    have = set(tkfont.families())
+    return next((f for f in candidates if f in have), None)
+
+
+class Ui:
+    """Small helpers shared by the panel and the dialogs."""
+
+    def __init__(self, ctk, root):
+        self.ctk, self.root = ctk, root
+        self.family = _family(FONTS)
+        self.mono = _family(MONO)
+        self._cache = {}
+
+    def font(self, size, weight="normal", mono=False):
+        return self.ctk.CTkFont(family=self.mono if mono else self.family, size=size, weight=weight)
+
+    def set(self, widget, **kw):
+        """configure() only what changed (CustomTkinter redraws on every call)."""
+        old = self._cache.setdefault(id(widget), {})
+        new = {k: v for k, v in kw.items() if old.get(k, object()) != v}
+        if new:
+            widget.configure(**new)
+            old.update(new)
+
+    def card(self, parent, pady=(14, 0)):
+        f = self.ctk.CTkFrame(parent, fg_color=CARD, corner_radius=16)
+        f.pack(fill="x", pady=pady)
+        return f
+
+    def label(self, parent, text="", size=14, colour=TEXT, weight="normal", **kw):
+        return self.ctk.CTkLabel(parent, text=text, font=self.font(size, weight), text_color=colour, **kw)
+
+    def button(self, parent, text, command, kind="plain", height=34, width=0, size=13, **kw):
+        colours = {"go": (GREEN, GREEN_HI, "white", None), "stop": (RED, RED_HI, "white", None),
+                   "plain": (CARD2, LINE, TEXT, None),
+                   "outline": ("transparent", CARD2, TEXT, LINE),
+                   "link": ("transparent", CARD, MUTED, None)}[kind]
+        fg, hover, text_colour, border = colours
+        extra = {"border_width": 2, "border_color": border} if border else {"border_width": 0}
+        return self.ctk.CTkButton(parent, text=text, command=command, height=height, width=width or 140,
+                                  corner_radius=10 if height < 40 else 12, fg_color=fg,
+                                  hover_color=hover, text_color=text_colour,
+                                  text_color_disabled=FAINT,
+                                  font=self.font(size, "bold" if kind in ("go", "stop") else "normal"),
+                                  **extra, **kw)
+
+    def ask(self, title, text, options):
+        """Modal question. options: [(label, value, kind)], the first is
+        the default answer; closing the window = None."""
+        ctk = self.ctk
+        win = ctk.CTkToplevel(self.root)
+        win.title(title)
+        win.configure(fg_color=CARD)
+        win.resizable(False, False)
+        win.transient(self.root)
+        self.label(win, title, 17, weight="bold").pack(anchor="w", padx=24, pady=(22, 6))
+        self.label(win, text, 14, MUTED, wraplength=400, justify="left").pack(anchor="w", padx=24)
+        row = ctk.CTkFrame(win, fg_color="transparent")
+        row.pack(fill="x", padx=24, pady=(20, 22))
+        answer = {"value": None}
+
+        def choose(value):
+            answer["value"] = value
+            win.destroy()
+        for label, value, kind in reversed(options):
+            self.button(row, label, lambda v=value: choose(v), kind, height=38, width=120).pack(
+                side="right", padx=(8, 0))
+        win.protocol("WM_DELETE_WINDOW", win.destroy)
+        win.update_idletasks()
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - win.winfo_reqwidth()) // 2
+        y = self.root.winfo_rooty() + 160
+        win.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+
+        def grab():
+            try:
+                win.grab_set()
+                win.focus_force()
+            except Exception:                   # noqa: BLE001 - not mapped yet
+                win.after(100, grab)
+        win.after(80, grab)
+        self.root.wait_window(win)
+        return answer["value"]
 
 
 class Panel:
-    def __init__(self, root, cfg, game_key):
-        import tkinter as tk
-        from tkinter import ttk
-        self.tk, self.ttk, self.root = tk, ttk, root
+    STEPS = (("reach", "Robot on the network"), ("robot", "Robot software"),
+             ("ready", "Robot ready"), ("control", "Robot control"), ("game", None))
+
+    def __init__(self, root, cfg, game_key, ctk):
+        self.root, self.ctk = root, ctk
+        self.ui = Ui(ctk, root)
         self.cfg = cfg
         self.game_key = game_key
         self.game = cfg["games"][game_key]
@@ -482,188 +584,251 @@ class Panel:
         self.by_key = {p.key: p for p in self.parts}
         self.ros = RosMonitor()
         self.checker = Checker(cfg["robot_ip"], self.parts)
-        self.message = ("Opening ..." if cfg.get("autostart", True) else "Not started", "info",
-                        "" if cfg.get("autostart", True) else
-                        "▶ Start everything starts the robot software, robot control and the game.")
+        autostart = cfg.get("autostart", True)
+        self.message = ("Opening ...", "info", "") if autostart else (
+            "Ready to start", "idle", "Start runs the robot software, robot control and the game.")
         self.worker = None
+        self.stopping = False
         self.cancel = threading.Event()
         self.skip_robot_wait = False
         self.waiting_since = None
         self.log_part = "game"
+        self._log_size = None
         self.game_was_ready = False
+        self.details_open = False
+        self.frame = 0
         self.choices = load_choices()
+        self.sel_engine, self.sel_level = self._initial_opponent()
         self._build()
         root.protocol("WM_DELETE_WINDOW", self.on_close)
-        root.after(300, self._tick)
-        if cfg.get("autostart", True):
+        root.after(150, self._tick)
+        if autostart:
             root.after(1200, self.start_all)
 
     # ------------------------------------------------------------ layout
     def _build(self):
-        tk, ttk, root = self.tk, self.ttk, self.root
+        ui, ctk, root = self.ui, self.ctk, self.root
         root.title(f"{self.title} - robot cell")
-        root.minsize(720, 640)
-        root.geometry("800x860")
-        style = ttk.Style(root)
-        try:
-            style.theme_use("clam")
-        except tk.TclError:
-            pass
-        from tkinter import font
-        for name in ("TkDefaultFont", "TkTextFont", "TkMenuFont"):
-            font.nametofont(name).configure(size=11)
-        style.configure("Big.TButton", font=("TkDefaultFont", 13, "bold"), padding=(14, 8))
-        style.configure("Head.TLabel", font=("TkDefaultFont", 18, "bold"))
-        style.configure("Sec.TLabel", font=("TkDefaultFont", 11, "bold"), foreground="#555")
-        style.configure("Dim.TLabel", foreground="#666")
+        root.configure(fg_color=BG)
+        root.geometry("600x880")
+        root.minsize(520, 480)
+        page = ctk.CTkScrollableFrame(root, fg_color=BG, scrollbar_button_color=CARD,
+                                      scrollbar_button_hover_color=CARD2)
+        self.page = page
+        page.pack(fill="both", expand=True, padx=(16, 4), pady=(10, 10))
 
-        outer = ttk.Frame(root, padding=12)
-        outer.pack(fill="both", expand=True)
-        head = ttk.Frame(outer)
-        head.pack(fill="x")
-        ttk.Label(head, text=f"{self.title}", style="Head.TLabel").pack(side="left")
-        ttk.Label(head, text="  robot cell control", style="Dim.TLabel").pack(side="left", pady=(6, 0))
+        # header
+        head = ctk.CTkFrame(page, fg_color="transparent")
+        head.pack(fill="x", pady=(6, 0))
+        icon = self._icon(44)
+        if icon is not None:
+            ctk.CTkLabel(head, text="", image=icon).pack(side="left", padx=(2, 14))
+        names = ctk.CTkFrame(head, fg_color="transparent")
+        names.pack(side="left")
+        ui.label(names, self.title, 24, weight="bold").pack(anchor="w")
+        ui.label(names, "Robot cell", 13, MUTED).pack(anchor="w")
 
-        self.banner = tk.Label(outer, text="", anchor="w", justify="left", fg="white",
-                               bg=COL["info"], font=("TkDefaultFont", 13, "bold"),
-                               padx=12, pady=8, wraplength=680)
-        self.banner.pack(fill="x", pady=(8, 2))
-        self.hint = ttk.Label(outer, text="", style="Dim.TLabel", wraplength=680, justify="left")
-        self.hint.pack(fill="x", pady=(0, 6))
-        bar = ttk.Frame(outer)
-        bar.pack(fill="x", pady=(0, 6))
-        self.start_btn = ttk.Button(bar, text="▶  Start everything", style="Big.TButton",
-                                    command=self.start_all)
-        self.start_btn.pack(side="left")
-        ttk.Button(bar, text="■  Stop everything", style="Big.TButton",
-                   command=self.stop_all).pack(side="left", padx=8)
-        self.skip_btn = ttk.Button(bar, text="Continue without robot status",
-                                   command=self._skip_wait)
+        # status + the main button
+        card = ui.card(page, pady=(16, 0))
+        top = ctk.CTkFrame(card, fg_color="transparent")
+        top.pack(fill="x", padx=20, pady=(18, 0))
+        self.status_dot = ui.label(top, "●", 22, BLUE, width=30, anchor="w")
+        self.status_dot.pack(side="left", anchor="n")
+        texts = ctk.CTkFrame(top, fg_color="transparent")
+        texts.pack(side="left", fill="x", expand=True)
+        self.status_title = ui.label(texts, "", 19, weight="bold", anchor="w", justify="left",
+                                     wraplength=460)
+        self.status_title.pack(fill="x")
+        self.status_hint = ui.label(texts, "", 14, MUTED, anchor="w", justify="left", wraplength=460)
+        self.status_hint.pack(fill="x", pady=(2, 0))
+        self.skip_btn = ui.button(card, "Continue without robot status", self._skip_wait, "link",
+                                  height=26, width=220, size=12)
+        buttons = ctk.CTkFrame(card, fg_color="transparent")
+        buttons.pack(fill="x", padx=20, pady=(16, 20))
+        self.primary = ui.button(buttons, "Start", self._primary, "go", height=48, size=16)
+        self.primary.pack(side="left", fill="x", expand=True)
+        self.secondary = ui.button(buttons, "Stop", self.stop_all, "outline", height=48, width=130,
+                                   size=15)
+        self.primary_action = "start"
+        self.secondary_shown = False
 
-        # robot checks
-        ttk.Label(outer, text="ROBOT", style="Sec.TLabel").pack(anchor="w", pady=(6, 0))
-        checks = ttk.Frame(outer)
-        checks.pack(fill="x")
-        self.check_rows = {}
-        for key, text in (("reach", f"Robot switched on and reachable ({self.cfg['robot_ip']})"),
-                          ("power", "Powered on, brakes released"),
-                          ("safety", "No stop (emergency / protective)"),
-                          ("program", "Pendant program running (External Control)"),
-                          ("camera", "Camera on USB 3")):
-            self.check_rows[key] = self._light_row(checks, text)
-        self.fix_btn = ttk.Button(self.check_rows["camera"][2], text="Fix (asks for the password)",
-                                  command=self._fix_usbfs)
-
-        # software parts
-        ttk.Label(outer, text="SOFTWARE", style="Sec.TLabel").pack(anchor="w", pady=(8, 0))
-        sw = ttk.Frame(outer)
-        sw.pack(fill="x")
-        sw.columnconfigure(1, weight=1)
-        self.part_rows = {}
-        for i, p in enumerate(self.parts):
-            dot = tk.Canvas(sw, width=16, height=16, highlightthickness=0)
-            dot.grid(row=i, column=0, padx=(0, 6), pady=2)
-            label = ttk.Label(sw, text=f"{p.title}  ", anchor="w")
-            label.grid(row=i, column=1, sticky="w")
-            state = ttk.Label(sw, text="", style="Dim.TLabel", width=26, anchor="w")
-            state.grid(row=i, column=2, sticky="w")
-            btn = ttk.Button(sw, text="Start", width=7, command=lambda k=p.key: self.toggle_part(k))
-            btn.grid(row=i, column=3, padx=4)
-            ttk.Button(sw, text="Log", width=5, command=lambda k=p.key: self._show_log(k)).grid(
-                row=i, column=4)
-            self.part_rows[p.key] = (dot, label, state, btn)
+        # steps
+        card = ui.card(page)
+        self.step_rows = {}
+        for i, (key, name) in enumerate(self.STEPS):
+            self.step_rows[key] = self._step_row(card, name or f"{self.title} game", first=i == 0)
+        ctk.CTkFrame(card, height=1, fg_color=LINE).pack(fill="x", padx=20, pady=(10, 4))
+        self.step_rows["camera"] = self._step_row(card, "Camera")
+        self.fix_btn = ui.button(self.step_rows["camera"][2], "Fix", self._fix_usbfs, "plain",
+                                 height=26, width=56, size=12)
+        ctk.CTkFrame(card, height=10, fg_color="transparent").pack()
 
         # opponent (chess)
-        self.engine_box = self.level_box = None
-        if "engine" in self.game:
-            self._build_opponent(outer)
+        self.has_opponent = "engine" in self.game and self._build_opponent(page)
 
-        # robot buttons (UR dashboard)
-        ttk.Label(outer, text="ROBOT BUTTONS  (work when the pendant is in Remote Control; "
-                  "otherwise use the pendant)", style="Sec.TLabel").pack(anchor="w", pady=(10, 2))
-        rb = ttk.Frame(outer)
-        rb.pack(fill="x")
-        for text, service, confirm in (("Power on", "power_on", False),
-                                       ("Release brakes", "brake_release", True),
-                                       ("Play program", "play", True),
-                                       ("Stop program", "stop", False),
-                                       ("Unlock protective stop", "unlock_protective_stop", True)):
-            ttk.Button(rb, text=text, command=lambda s=service, c=confirm, t=text:
-                       self.dashboard(s, t, c)).pack(side="left", padx=(0, 6))
+        # details
+        self.more_btn = ui.button(page, "Show details  ▾", self._toggle_details, "link",
+                                  height=34, width=150, size=13, anchor="w")
+        self.more_btn.pack(anchor="w", pady=(12, 0))
+        self.details = ctk.CTkFrame(page, fg_color="transparent")
+        self._build_details(self.details)
 
-        # log
-        lh = ttk.Frame(outer)
-        lh.pack(fill="x", pady=(10, 2))
-        self.log_title = ttk.Label(lh, text="LOG", style="Sec.TLabel")
-        self.log_title.pack(side="left")
-        ttk.Button(lh, text="Open in a terminal", command=self._log_terminal).pack(side="right")
-        self.log = tk.Text(outer, height=10, bg="#1e1e1e", fg="#dddddd", insertbackground="white",
-                           font=("DejaVu Sans Mono", 9), wrap="word", relief="flat")
-        self.log.pack(fill="both", expand=True)
+    def _icon(self, size):
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons", f"{self.game_key}.png")
+        try:
+            from PIL import Image
+            img = Image.open(path)
+            return self.ctk.CTkImage(light_image=img, dark_image=img, size=(size, size))
+        except Exception:                       # noqa: BLE001 - no Pillow / no icon: no image
+            return None
 
-    def _light_row(self, parent, text):
-        tk, ttk = self.tk, self.ttk
-        row = ttk.Frame(parent)
-        row.pack(fill="x")
-        dot = tk.Canvas(row, width=16, height=16, highlightthickness=0)
-        dot.pack(side="left", padx=(0, 6), pady=1)
-        ttk.Label(row, text=text).pack(side="left")
-        detail = ttk.Label(row, text="", style="Dim.TLabel")
-        detail.pack(side="left", padx=8)
+    def _step_row(self, parent, name, first=False):
+        ui = self.ui
+        row = self.ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x", padx=20, pady=(16 if first else 6, 0))
+        dot = ui.label(row, "●", 16, FAINT, width=22, anchor="w")
+        dot.pack(side="left")
+        ui.label(row, name, 15).pack(side="left", padx=(4, 0))
+        detail = ui.label(row, "", 13, MUTED)
+        detail.pack(side="right")
         return dot, detail, row
 
-    def _build_opponent(self, parent):
-        ttk = self.ttk
+    def _build_opponent(self, page):
         try:
-            from chess_game.engines import APPROX_ELO, CHOICES, LEVELS, TITLES
+            from chess_game.engines import APPROX_ELO, CHOICES, LEVELS
         except ImportError:
-            return
+            return False
+        ui, ctk = self.ui, self.ctk
         self.engines = [n for n in CHOICES if n in APPROX_ELO]
-        self.engine_titles = {n: TITLES.get(n, n) for n in self.engines}
         self.approx = APPROX_ELO
         self.levels = list(LEVELS)
+        if self.sel_engine not in self.engines:
+            self.sel_engine = "stockfish" if "stockfish" in self.engines else self.engines[0]
+        card = ui.card(page)
+        head = ctk.CTkFrame(card, fg_color="transparent")
+        head.pack(fill="x", padx=20, pady=(16, 10))
+        ui.label(head, "Opponent", 16, weight="bold").pack(side="left")
+        self.opp_note = ui.label(head, "", 12, MUTED)
+        self.opp_note.pack(side="right")
+        seg = dict(height=38, corner_radius=10, border_width=3, fg_color=CARD2,
+                   selected_color=BLUE, selected_hover_color="#2f7be0",
+                   unselected_color=CARD2, unselected_hover_color=LINE,
+                   text_color=TEXT, font=ui.font(14))
+        self.engine_seg = ctk.CTkSegmentedButton(card, values=[SHORT.get(n, n) for n in self.engines],
+                                                 command=self._engine_picked, **seg)
+        self.engine_seg.pack(fill="x", padx=20)
+        row = ctk.CTkFrame(card, fg_color="transparent")
+        row.pack(fill="x", padx=20, pady=(14, 0))
+        ui.label(row, "Level", 14, MUTED).pack(side="left", padx=(0, 12))
+        self.level_seg = ctk.CTkSegmentedButton(row, values=[str(lv) for lv in self.levels],
+                                                command=self._level_picked, width=230, **seg)
+        self.level_seg.pack(side="left")
+        self.elo_label = ui.label(row, "", 26, weight="bold")
+        self.elo_label.pack(side="right")
+        self.about_label = ui.label(card, "", 13, MUTED, anchor="w")
+        self.about_label.pack(fill="x", padx=20, pady=(10, 0))
+        ui.label(card, "In the game window: E switches the engine, 1-5 the level.", 12, FAINT,
+                 anchor="w").pack(fill="x", padx=20, pady=(2, 16))
+        self.engine_seg.set(SHORT.get(self.sel_engine, self.sel_engine))
+        self.level_seg.set(str(self.sel_level))
+        self._show_opponent()
+        return True
+
+    def _build_details(self, parent):
+        ui, ctk = self.ui, self.ctk
+        # parts
+        card = ui.card(parent, pady=(6, 0))
+        ui.label(card, "Parts", 16, weight="bold").pack(anchor="w", padx=20, pady=(16, 4))
+        self.part_rows = {}
+        for p in self.parts:
+            row = ctk.CTkFrame(card, fg_color="transparent")
+            row.pack(fill="x", padx=20, pady=4)
+            names = ctk.CTkFrame(row, fg_color="transparent")
+            names.pack(side="left")
+            ui.label(names, p.title, 14, anchor="w").pack(anchor="w")
+            state = ui.label(names, p.note, 12, MUTED, anchor="w")
+            state.pack(anchor="w")
+            log = ui.button(row, "Log", lambda k=p.key: self._show_log(k), "plain", height=30,
+                            width=52, size=12)
+            log.pack(side="right")
+            stop = ui.button(row, "Stop", lambda k=p.key: self.stop_part(k), "plain", height=30,
+                             width=62, size=12)
+            stop.pack(side="right", padx=6)
+            start = ui.button(row, "Start", lambda k=p.key: self.start_part(k), "plain", height=30,
+                              width=76, size=12)
+            start.pack(side="right")
+            self.part_rows[p.key] = (state, start, stop)
+        ctk.CTkFrame(card, height=12, fg_color="transparent").pack()
+
+        # robot buttons (UR dashboard)
+        card = ui.card(parent)
+        ui.label(card, "Robot buttons", 16, weight="bold").pack(anchor="w", padx=20, pady=(16, 0))
+        ui.label(card, "Only in Remote Control mode on the pendant - otherwise use the pendant.",
+                 12, MUTED, anchor="w").pack(fill="x", padx=20, pady=(0, 8))
+        grid = ctk.CTkFrame(card, fg_color="transparent")
+        grid.pack(fill="x", padx=20, pady=(0, 18))
+        for i, (text, service, confirm) in enumerate((
+                ("Power on", "power_on", False), ("Release brakes", "brake_release", True),
+                ("Unlock stop", "unlock_protective_stop", True), ("Play program", "play", True),
+                ("Stop program", "stop", False))):
+            grid.columnconfigure(i % 3, weight=1)
+            ui.button(grid, text, lambda s=service, t=text, c=confirm: self.dashboard(s, t, c),
+                      "plain", height=34, size=13).grid(row=i // 3, column=i % 3, sticky="ew",
+                                                        padx=(0 if i % 3 == 0 else 6, 0), pady=3)
+
+        # log
+        card = ui.card(parent)
+        head = ctk.CTkFrame(card, fg_color="transparent")
+        head.pack(fill="x", padx=20, pady=(14, 8))
+        self.log_title = ui.label(head, "Log", 16, weight="bold")
+        self.log_title.pack(side="left")
+        ui.button(head, "Open in a terminal", self._log_terminal, "plain", height=28, width=140,
+                  size=12).pack(side="right")
+        self.log = ctk.CTkTextbox(card, height=220, fg_color=BG, text_color="#c9d1d9",
+                                  font=ui.font(12, mono=True), wrap="word", corner_radius=10,
+                                  border_width=0)
+        self.log.pack(fill="x", padx=14, pady=(0, 14))
+        self.log.configure(state="disabled")
+
+    def _toggle_details(self):
+        self.details_open = not self.details_open
+        if self.details_open:
+            self.details.pack(fill="x")
+            self.more_btn.configure(text="Hide details  ▴")
+        else:
+            self.details.pack_forget()
+            self.more_btn.configure(text="Show details  ▾")
+        self._log_size = None
+
+    # ------------------------------------------------------------ opponent
+    def _initial_opponent(self):
         mine = self.choices.get(self.game_key, {})
-        engine = mine.get("engine", self.game.get("engine", "stockfish"))
-        level = int(mine.get("level", self.game.get("level", 3)))
-        ttk.Label(parent, text="OPPONENT", style="Sec.TLabel").pack(anchor="w", pady=(8, 0))
-        row = ttk.Frame(parent)
-        row.pack(fill="x")
-        self.engine_box = ttk.Combobox(row, state="readonly", width=20,
-                                       values=[self.engine_titles[n] for n in self.engines])
-        self.engine_box.pack(side="left")
-        self.level_box = ttk.Combobox(row, state="readonly", width=22)
-        self.level_box.pack(side="left", padx=8)
-        ttk.Label(row, text="in the game window: E engine, 1-5 level",
-                  style="Dim.TLabel").pack(side="left")
-        self.engine_box.current(self.engines.index(engine) if engine in self.engines else 0)
-        self._fill_levels(level)
-        self.engine_box.bind("<<ComboboxSelected>>", lambda e: (self._fill_levels(), self._changed()))
-        self.level_box.bind("<<ComboboxSelected>>", lambda e: (self._save_opponent(), self._changed()))
+        return (mine.get("engine", self.game.get("engine", "stockfish")),
+                int(mine.get("level", self.game.get("level", 3))))
 
-    def _fill_levels(self, level=None):
-        name = self.engines[self.engine_box.current()]
-        if level is None:
-            level = self.levels[max(self.level_box.current(), 0)] if self.level_box.get() else 3
-        elo = self.approx.get(name, {})
-        self.level_box["values"] = [f"level {lv}  (~{elo[lv]} Elo)" if lv in elo else f"level {lv}"
-                                    for lv in self.levels]
-        self.level_box.current(self.levels.index(level) if level in self.levels else 2)
-        self._save_opponent()
+    def _engine_picked(self, value):
+        self.sel_engine = next(n for n in self.engines if SHORT.get(n, n) == value)
+        self._opponent_changed()
 
-    def _changed(self):
-        if self.by_key["game"].running():
-            self.say("The new opponent plays from the next game start", "info",
-                     "Or now: E (engine) and 1-5 (level) in the game window.")
+    def _level_picked(self, value):
+        self.sel_level = int(value)
+        self._opponent_changed()
+
+    def _opponent_changed(self):
+        self.choices[self.game_key] = {"engine": self.sel_engine, "level": self.sel_level}
+        save_choices(self.choices)
+        self._show_opponent()
+
+    def _show_opponent(self):
+        elo = self.approx.get(self.sel_engine, {}).get(self.sel_level)
+        self.elo_label.configure(text=f"~{elo} Elo" if elo else "")
+        self.about_label.configure(text=f"{SHORT.get(self.sel_engine, self.sel_engine)} level "
+                                        f"{self.sel_level} - {ABOUT.get(self.sel_engine, '')}")
+        running = self.by_key["game"].running()
+        self.opp_note.configure(text="from the next game start" if running else "")
 
     def _opponent(self):
-        if self.engine_box is None:
-            return self.game.get("engine", "stockfish"), int(self.game.get("level", 3))
-        return self.engines[self.engine_box.current()], self.levels[self.level_box.current()]
-
-    def _save_opponent(self):
-        engine, level = self._opponent()
-        self.choices[self.game_key] = {"engine": engine, "level": level}
-        save_choices(self.choices)
+        return self.sel_engine, self.sel_level
 
     def _game_command(self):
         engine, level = self._opponent()
@@ -677,6 +842,12 @@ class Panel:
         self.skip_robot_wait = True
 
     # ------------------------------------------------------------ actions
+    def _primary(self):
+        if self.primary_action == "start":
+            self.start_all()
+        elif self.primary_action == "stop":
+            self.stop_all()
+
     def _run(self, fn, *args):
         if self.worker is not None and self.worker.is_alive():
             return False
@@ -691,7 +862,7 @@ class Panel:
         except Cancelled:
             pass
         except (Failed, RuntimeError, OSError) as e:
-            self.say(str(e), "error", "See the log below (Log button of that row).")
+            self.say(str(e), "error", "Show details - Log shows that part's output.")
         finally:
             self.waiting_since = None
 
@@ -700,25 +871,26 @@ class Panel:
             return
         foreign = self._foreign()
         if foreign:
-            from tkinter import messagebox
             names = ", ".join(sorted({t for t, _ in foreign}))
-            if not messagebox.askyesno(
-                    f"Start {self.title}",
-                    f"Robot software from another workspace is running ({names}).\n\n"
-                    f"Stop it and start {self.title}?", parent=self.root):
-                self.say(f"Not started: {names} is running", "error",
-                         "Stop it first (Stop everything, or its own panel).")
+            if not self.ui.ask(f"Start {self.title}?",
+                               f"{names} is running from another workspace. Both use the same "
+                               f"robot. Stop it and start {self.title}?",
+                               [("Stop it and start", True, "go"), ("Cancel", False, "plain")]):
+                self.say(f"Not started - {names} is running", "error",
+                         "Stop it first, then start again.")
                 return
         self._run(self._start_sequence, [pid for _, pid in foreign])
 
     def _foreign(self):
         """(title, pid) of cell processes running from another workspace."""
         out = []
-        cmds = [(g["title"] + " game", g["game"]) for k, g in self.cfg["games"].items()]
+        cmds = [(g["title"] + " game", g["game"]) for g in self.cfg["games"].values()]
         cmds += [("Robot control", self.cfg["control"]), ("Robot software", self.cfg["robot"])]
+        table = process_table()
+        own = {p.proc.pid for p in self.parts if p.own()}
         for title, cmd in cmds:
-            for pid in find_processes(signature(cmd)):
-                if runs_from(pid, self.game["workspace"]) is False:
+            for pid in find_processes(signature(cmd), table):
+                if pid not in own and runs_from(pid, self.game["workspace"]) is False:
                     out.append((title, pid))
         return out
 
@@ -730,35 +902,36 @@ class Panel:
     def _start_sequence(self, foreign_pids):
         robot, control, game = self.parts
         if foreign_pids:
-            self.say("Stopping the other game's robot software ...", "info")
+            self.say("Stopping the other game ...", "info")
             stop_pids(foreign_pids)
         self.skip_robot_wait = False
         ip = self.cfg["robot_ip"]
-        self._wait(lambda: self.checker.reachable is not False,
-                   lambda: (f"Robot not reachable ({ip})", "action",
-                            "Switch the robot on at the control box / pendant and check the "
-                            "network cable. Starting as soon as it answers."), timeout=None)
+        self._wait(lambda: self.checker.reachable is not False or self.skip_robot_wait,
+                   lambda: ("Switch the robot on", "action",
+                            f"The robot ({ip}) does not answer. Switch it on at the control box "
+                            "and check the network cable - starting as soon as it answers."),
+                   timeout=None)
         if not self._up(robot):
-            self.say("Starting the robot software ...", "info",
+            self.say("Starting the robot software", "info",
                      "Driver, MoveIt, RViz and the gripper - about 20 s.")
             self._show_log("robot")
             robot.start()
         self._wait_ready(robot, 120)
         self._wait_robot()
         if not self._up(control):
-            self.say("Starting robot control ...", "info")
+            self.say("Starting robot control", "info")
             self._show_log("control")
             control.start()
         self._wait_ready(control, 60)
         if not self._up(game):
-            self.say(f"Starting the {self.title.lower()} game ...", "info",
+            self.say(f"Opening the {self.title.lower()} game", "info",
                      "Its window opens in a few seconds.")
             self._show_log("game")
             game.start(self._game_command())
         self._wait_ready(game, 90)
         self.game_was_ready = True
         self.say(f"Ready - play in the {self.title} window", "done",
-                 "Keep the E-stop at hand. Stop everything when you are done.")
+                 "Keep the E-stop at hand. Stop when you are done.")
 
     def _wait(self, ok, message, timeout=60.0, part=None):
         t0 = time.time()
@@ -779,46 +952,46 @@ class Panel:
         if not self.ros.ok or not part.nodes:     # cannot see nodes: give it a few seconds
             t_end = time.time() + 8.0
             self._wait(lambda: time.time() > t_end,
-                       lambda: (f"Starting {part.title.lower()} ...", "info", ""), part=part)
+                       lambda: (f"Starting {part.title.lower()}", "info", ""), part=part)
             return
         self._wait(lambda: set(part.nodes) <= self.ros.nodes,
-                   lambda: (f"Starting {part.title.lower()} ...", "info",
-                            f"Waiting for {', '.join(part.nodes)}."),
+                   lambda: (self.message[0], "info", self.message[2]),
                    timeout=timeout, part=part)
 
     def _robot_problem(self):
-        """What the robot still needs, or None when the program runs."""
+        """(title, kind, hint, short) of what the robot still needs, or None."""
         r = self.ros
         if self.skip_robot_wait or not r.ok:
             return None
         if not r.driver_up():
-            return ("Waiting for the robot driver ...", "info", "")
+            return ("Connecting to the robot", "info", "", "connecting")
         s, m = r.safety_mode, r.robot_mode
         if s in EMERGENCY_STOPS:
-            return ("EMERGENCY STOP is pressed", "action",
-                    "Release the E-stop, then on the pendant: power on and release the brakes.")
+            return ("Emergency stop is pressed", "error",
+                    "Release the E-stop, then on the pendant: power on and release the brakes.",
+                    "emergency stop")
         if s == PROTECTIVE_STOP:
-            return ("Protective stop", "action",
-                    "Make sure nothing is in the way, then unlock it on the pendant "
-                    "(or 'Unlock protective stop' below).")
+            return ("Protective stop", "error",
+                    "Make sure nothing is in the way, then unlock it on the pendant.",
+                    "protective stop")
         if s == SAFEGUARD_STOP:
-            return ("Safeguard stop", "action", "A safety input stopped the robot - check the cell.")
+            return ("Safeguard stop", "error", "A safety input stopped the robot - check the cell.",
+                    "safeguard stop")
         if m == POWER_OFF:
-            return ("Robot is powered off", "action",
-                    "On the pendant: tap the red button bottom left, ON, then START "
-                    "(or 'Power on' and 'Release brakes' below).")
+            return ("Power on the robot", "action",
+                    "On the pendant: the red button bottom left, then ON and START.",
+                    "powered off")
         if m in (POWER_ON, IDLE):
-            return ("Release the brakes", "action",
-                    "On the pendant: START in the power dialog (or 'Release brakes' below).")
+            return ("Release the brakes", "action", "On the pendant: START in the power dialog.",
+                    "brakes locked")
         if r.program_running:
             return None
-        return ("Press ▶ (play) on the pendant", "action",
-                "Run the External Control program, as for checkers. "
-                "Starting robot control as soon as it runs.")
+        return ("Press ▶ on the pendant", "action",
+                "Run the External Control program, as for checkers. Robot control starts "
+                "as soon as it runs.", "press ▶ on the pendant")
 
     def _wait_robot(self):
-        t0 = time.time()
-        self.waiting_since = t0
+        self.waiting_since = time.time()
         while True:
             if self.cancel.is_set():
                 raise Cancelled()
@@ -827,58 +1000,74 @@ class Panel:
             problem = self._robot_problem()
             if problem is None:
                 return
-            self.say(*problem)
+            self.say(*problem[:3])
             time.sleep(0.3)
 
     def stop_all(self):
+        if self.stopping:
+            return
+        self.stopping = True
         self.cancel.set()
         threading.Thread(target=self._stop_sequence, daemon=True).start()
 
     def _stop_sequence(self):
-        if self.worker is not None:
-            self.worker.join(timeout=3.0)
-        self.say("Stopping ...", "info", "Game, robot control, then the robot software.")
-        for p in reversed(self.parts):
-            if p.running():
-                self.say(f"Stopping {p.title.lower()} ...", "info")
-                p.stop()
-        self.game_was_ready = False
-        self.say("Everything stopped", "info",
-                 "Robot: power it off on the pendant if nobody uses it any more.")
+        try:
+            if self.worker is not None:
+                self.worker.join(timeout=3.0)
+            for p in reversed(self.parts):
+                if p.running():
+                    self.say(f"Stopping {p.title.lower()}", "info",
+                             "Game, robot control, then the robot software.")
+                    p.stop()
+            self.game_was_ready = False
+            self.say("Everything is stopped", "idle",
+                     "Power the robot off on the pendant if nobody needs it.")
+        finally:
+            self.stopping = False
 
-    def toggle_part(self, key):
+    def start_part(self, key):
         part = self.by_key[key]
-        if not part.running() and self._up(part):
-            self.say(f"{part.title} was started some other way", "info",
-                     f"Its nodes ({', '.join(part.nodes)}) run, but not from a launch this panel "
-                     "knows - stop it where it was started.")
+        if self._up(part):
+            self.say(f"{part.title} is already running", "info", "")
             return
-        if part.running():
+
+        def go():
+            self.say(f"Starting {part.title.lower()}", "info")
+            part.start(self._game_command() if key == "game" else None)
+            self._wait_ready(part, 120)
             if key == "game":
-                self.game_was_ready = False
-            self._run(lambda: (self.say(f"Stopping {part.title.lower()} ...", "info"),
-                               part.stop(), self.say(f"{part.title} stopped", "info")))
-        else:
-            def go():
-                part.start(self._game_command() if key == "game" else None)
-                self._wait_ready(part, 120)
-                if key == "game":
-                    self.game_was_ready = True
-                self.say(f"{part.title} running", "done")
-            self._run(go)
+                self.game_was_ready = True
+            self.say(f"{part.title} is running", "done")
         self._show_log(key)
+        self._run(go)
+
+    def stop_part(self, key):
+        part = self.by_key[key]
+        if not part.running():
+            if self._up(part):
+                self.say(f"{part.title} was started some other way", "info",
+                         "Stop it where it was started.")
+            return
+        if key == "game":
+            self.game_was_ready = False
+
+        def go():
+            self.say(f"Stopping {part.title.lower()}", "info")
+            part.stop()
+            self.say(f"{part.title} is stopped", "idle")
+        self._show_log(key)
+        self._run(go)
 
     def dashboard(self, service, title, confirm):
-        from tkinter import messagebox
-        if confirm and not messagebox.askyesno(
-                title, "The robot may move.\n\nIs someone at the E-stop and the area clear?",
-                parent=self.root):
+        if confirm and not self.ui.ask(
+                title, "The robot may move. Is someone at the E-stop and the area clear?",
+                [("Yes, go ahead", True, "go"), ("Cancel", False, "plain")]):
             return
 
         def call():
             ok, msg = self.ros.trigger(DASHBOARD + service)
-            self.say(f"{title}: {'done' if ok else 'failed'}", "info" if ok else "error",
-                     msg + ("" if ok else "  (Local mode on the pendant? Then use the pendant.)"))
+            self.say(f"{title}: {'done' if ok else 'not possible'}", "info" if ok else "error",
+                     msg + ("" if ok else " - in Local mode, use the pendant."))
         threading.Thread(target=call, daemon=True).start()
 
     def _fix_usbfs(self):
@@ -905,23 +1094,21 @@ class Panel:
 
     def _update_log(self):
         part = self.by_key[self.log_part]
-        self.log_title.configure(text=f"LOG - {part.title}   (~/.cocohrip/logs/{os.path.basename(part.log_path)})"
-                                 if part.log_path.startswith(os.path.expanduser("~/.cocohrip/"))
-                                 else f"LOG - {part.title}   ({os.path.basename(part.log_path)})")
+        self.ui.set(self.log_title, text=f"Log - {part.title}")
         try:
             size = os.path.getsize(part.log_path)
         except OSError:
             size = -1
-        if size == getattr(self, "_log_size", None):
+        if size == self._log_size:
             return
         self._log_size = size
-        text = "(nothing yet)"
+        text = "Nothing yet."
         if size >= 0:
             with open(part.log_path, "rb") as f:
                 f.seek(max(0, size - 32000))
                 text = ANSI.sub("", f.read().decode(errors="replace"))
                 text = "\n".join(text.splitlines()[-300:])
-        at_end = self.log.yview()[1] > 0.98
+        at_end = self.log._textbox.yview()[1] > 0.98
         self.log.configure(state="normal")
         self.log.delete("1.0", "end")
         self.log.insert("end", text)
@@ -930,112 +1117,136 @@ class Panel:
             self.log.see("end")
 
     # ------------------------------------------------------------ refresh
-    def _dot(self, canvas, colour):
-        canvas.delete("all")
-        canvas.create_oval(2, 2, 14, 14, fill=COL[colour], outline="")
-
     def _tick(self):
         try:
             self._refresh()
         finally:
-            self.root.after(400, self._tick)
+            self.root.after(150, self._tick)
+
+    def _dot(self, key, colour, detail, spin=False):
+        dot, label = self.step_rows[key][:2]
+        self.ui.set(dot, text=SPIN[self.frame % 4] if spin else "●", text_color=colour)
+        self.ui.set(label, text=detail)
 
     def _refresh(self):
-        c, r = self.checker, self.ros
-        busy = self.worker is not None and self.worker.is_alive()
-        # game closed by the player (Q) while everything else runs
-        game = self.by_key["game"]
-        if self.game_was_ready and not busy and not self.checker.pids["game"] and not game.own():
+        ui, c, r = self.ui, self.checker, self.ros
+        self.frame += 1
+        busy = (self.worker is not None and self.worker.is_alive()) or self.stopping
+        running = {p.key: bool(c.pids[p.key]) or p.own() for p in self.parts}
+        ready = {p.key: running[p.key] and (set(p.nodes) <= r.nodes if r.ok and p.nodes else True)
+                 for p in self.parts}
+        if self.game_was_ready and not busy and not running["game"]:
             self.game_was_ready = False
-            self.say(f"The {self.title.lower()} game was closed", "info",
-                     "Start it again with Start in its row, or Stop everything.")
+            self.say(f"The {self.title.lower()} game was closed", "idle",
+                     "Start opens it again. Stop ends everything.")
+
+        # status card
         text, kind, hint = self.message
-        self.banner.configure(text=text, bg=COL.get(kind, COL["info"]))
-        self.hint.configure(text=hint)
-        self.start_btn.state(["disabled"] if busy else ["!disabled"])
-        waiting = busy and self.waiting_since and time.time() - self.waiting_since > 20
-        if waiting and kind in ("action", "info") and not self.skip_robot_wait:
-            self.skip_btn.pack(side="left", padx=8)
+        ui.set(self.status_dot, text=SPIN[self.frame % 4] if busy else "●",
+               text_color=KIND.get(kind, BLUE))
+        ui.set(self.status_title, text=text)
+        ui.set(self.status_hint, text=hint)
+        waiting = busy and not self.stopping and self.waiting_since \
+            and time.time() - self.waiting_since > 20 and not self.skip_robot_wait \
+            and kind in ("action", "info")
+        if waiting:
+            self.skip_btn.pack(anchor="w", padx=56, pady=(6, 0), before=self.primary.master)
         else:
             self.skip_btn.pack_forget()
 
-        rows = self.check_rows
-        reach = {True: ("ok", ""), False: ("bad", "no answer"), None: ("off", "checking")}
-        self._set(rows["reach"], *reach[c.reachable])
-        if not r.ok:
-            for k in ("power", "safety", "program"):
-                self._set(rows[k], "off", r.error or "")
-        elif not r.driver_up():
-            for k in ("power", "safety", "program"):
-                self._set(rows[k], "off", "robot software not running")
+        # main button: Start / Stop (+ Stop beside Start when only some parts run)
+        any_running = any(running.values())
+        if self.stopping:
+            action, label, kind_btn = "none", "Stopping ...", "stop"
+        elif busy or all(ready.values()):
+            action, label, kind_btn = "stop", "Stop", "stop"
         else:
-            m, s = r.robot_mode, r.safety_mode
-            if not r.has_modes:
-                self._set(rows["power"], "off", "unknown (ur_dashboard_msgs missing)")
-                self._set(rows["safety"], "off", "unknown")
+            action, label, kind_btn = "start", "Start", "go"
+        if action != self.primary_action or self.primary.cget("text") != label:
+            self.primary_action = action
+            fg, hover = (RED, RED_HI) if kind_btn == "stop" else (GREEN, GREEN_HI)
+            ui.set(self.primary, text=label, fg_color=fg, hover_color=hover,
+                   state="disabled" if action == "none" else "normal")
+        show_secondary = action == "start" and any_running
+        if show_secondary != self.secondary_shown:
+            self.secondary_shown = show_secondary
+            if show_secondary:
+                self.secondary.pack(side="left", padx=(10, 0))
             else:
-                self._set(rows["power"], *({RUNNING: ("ok", "")}.get(
-                    m, ("bad", {POWER_OFF: "powered off", POWER_ON: "brakes locked",
-                                IDLE: "brakes locked"}.get(m, f"mode {m}")))))
-                self._set(rows["safety"], *(("ok", "") if s in (SAFETY_NORMAL, SAFETY_REDUCED)
-                                             else ("bad", {PROTECTIVE_STOP: "protective stop",
-                                                           SAFEGUARD_STOP: "safeguard stop",
-                                                           6: "EMERGENCY STOP",
-                                                           7: "EMERGENCY STOP"}.get(s, f"mode {s}"))))
-            p = r.program_running
-            self._set(rows["program"], *({True: ("ok", ""), False: ("bad", "press ▶ on the pendant"),
-                                          None: ("off", "unknown")}[p]))
-        speed = c.camera_speed
-        if speed is None:
-            self._set(rows["camera"], "bad", "not found - check the cable")
-        elif speed < 5000:
-            self._set(rows["camera"], "bad", f"{speed} Mbit/s - use a blue USB 3 port")
-        elif c.usbfs not in (None, 0) and c.usbfs < 1000:
-            self._set(rows["camera"], "wait", f"USB memory limit {c.usbfs} MB (after a reboot)")
+                self.secondary.pack_forget()
+
+        # steps
+        ip = self.cfg["robot_ip"]
+        self._dot("reach", *{True: (GREEN_HI, ip), False: (RED_HI, "no answer"),
+                             None: (FAINT, "checking")}[c.reachable])
+        for key in ("robot", "control", "game"):
+            elsewhere = "  (terminal)" if running[key] and c.external[key] else ""
+            if ready[key]:
+                done = "window open" if key == "game" else "running"
+                self._dot(key, GREEN_HI, done + elsewhere)
+            elif running[key]:
+                self._dot(key, AMBER, "starting", spin=True)
+            else:
+                self._dot(key, FAINT, "off")
+        if not r.ok:
+            self._dot("ready", FAINT, "no ROS - not checked")
+        elif self.skip_robot_wait:
+            self._dot("ready", FAINT, "not checked")
+        elif not r.driver_up():
+            self._dot("ready", FAINT, "-")
         else:
-            self._set(rows["camera"], "ok", "")
-        if c.usbfs not in (None, 0) and c.usbfs < 1000:
-            self.fix_btn.pack(side="left")
+            problem = self._robot_problem()
+            if problem is None:
+                self._dot("ready", GREEN_HI, "ready")
+            else:
+                self._dot("ready", RED_HI if problem[1] == "error" else AMBER, problem[3])
+        speed, usbfs = c.camera_speed, c.usbfs
+        needs_fix = usbfs not in (None, 0) and usbfs < 1000
+        if speed is None:
+            self._dot("camera", RED_HI, "not found - check the cable")
+        elif speed < 5000:
+            self._dot("camera", RED_HI, "USB 2 - use a blue USB 3 port")
+        elif needs_fix:
+            self._dot("camera", AMBER, "memory limit after a reboot")
+        else:
+            self._dot("camera", GREEN_HI, "USB 3")
+        if needs_fix:
+            self.fix_btn.pack(side="right", padx=(10, 0), before=self.step_rows["camera"][1])
         else:
             self.fix_btn.pack_forget()
 
-        for p in self.parts:
-            dot, label, state, btn = self.part_rows[p.key]
-            running = bool(c.pids[p.key]) or p.own()
-            ready = running and (set(p.nodes) <= r.nodes if r.ok and p.nodes else True)
-            if not running:
-                colour, txt = "off", "stopped"
-            elif ready:
-                colour, txt = "ok", "running"
-            else:
-                colour, txt = "wait", "starting ..."
-            if running and c.external[p.key]:
-                txt += " (started elsewhere)"
-            self._dot(dot, colour)
-            state.configure(text=txt)
-            btn.configure(text="Stop" if running else "Start")
-            btn.state(["disabled"] if busy else ["!disabled"])
-        self._update_log()
+        if self.has_opponent:
+            ui.set(self.opp_note, text="from the next game start" if running["game"] else "")
 
-    def _set(self, row, colour, detail):
-        dot, label = row[:2]
-        self._dot(dot, colour)
-        label.configure(text=detail)
+        # details
+        if self.details_open:
+            for p in self.parts:
+                state, start, stop = self.part_rows[p.key]
+                if ready[p.key]:
+                    txt, col = "running" + ("  (terminal)" if c.external[p.key] else ""), GREEN_HI
+                elif running[p.key]:
+                    txt, col = "starting", AMBER
+                else:
+                    txt, col = "off", MUTED
+                ui.set(state, text=txt, text_color=col)
+                ui.set(start, state="disabled" if busy or running[p.key] else "normal")
+                ui.set(stop, state="disabled" if busy or not running[p.key] else "normal")
+            self._update_log()
 
     # ------------------------------------------------------------ close
     def on_close(self):
-        from tkinter import messagebox
         if any(self.checker.pids[p.key] or p.own() for p in self.parts):
-            answer = messagebox.askyesnocancel(
-                "Close the panel",
-                "Stop the game, robot control and the robot software too?\n\n"
-                "Yes = stop everything    No = leave them running", parent=self.root)
+            answer = self.ui.ask(
+                "Close the panel?",
+                "The game, robot control and the robot software are still running.",
+                [("Stop everything", "stop", "stop"), ("Leave running", "leave", "plain"),
+                 ("Cancel", None, "plain")])
             if answer is None:
                 return
-            if answer:
+            if answer == "stop":
                 self.cancel.set()
-                self.say("Stopping everything ...", "info")
-                self.banner.configure(text="Stopping everything ...")
+                self.say("Stopping everything", "info", "")
+                self._refresh()
                 self.root.update()
                 for p in reversed(self.parts):
                     p.stop()
@@ -1057,6 +1268,31 @@ def _single_instance():
     return f
 
 
+def _note_window(ctk, title, text, work=None):
+    """A small window with a message (and `work` run first, showing
+    'please wait')."""
+    root = ctk.CTk(className="cocohrip-stop")
+    root.title(title)
+    root.configure(fg_color=CARD)
+    root.minsize(400, 1)
+    root.resizable(False, False)
+    ui = Ui(ctk, root)
+    ui.label(root, title, 18, weight="bold").pack(anchor="w", padx=26, pady=(24, 6))
+    msg = ui.label(root, "Please wait ..." if work else text, 14, MUTED, wraplength=380,
+                   justify="left", anchor="w")
+    msg.pack(fill="x", padx=26)
+    btn = ui.button(root, "Close", root.destroy, "plain", height=38, width=110)
+    btn.pack(anchor="e", padx=26, pady=(22, 22))
+    if work:
+        btn.configure(state="disabled")
+
+        def run():
+            result = work()
+            root.after(0, lambda: (msg.configure(text=result), btn.configure(state="normal")))
+        root.after(300, lambda: threading.Thread(target=run, daemon=True).start())
+    root.mainloop()
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("game", nargs="?", default="chess")
@@ -1066,34 +1302,37 @@ def main(argv=None):
     cfg = load_config()
     if args.no_autostart:
         cfg["autostart"] = False
+    try:
+        import customtkinter as ctk
+    except ImportError:
+        print("customtkinter is missing: run launcher/install.sh", file=sys.stderr)
+        subprocess.run(["zenity", "--error", "--text",
+                        "The robot cell panel needs customtkinter.\nRun: bash launcher/install.sh"],
+                       stderr=subprocess.DEVNULL)
+        return 1
+    ctk.set_appearance_mode("dark")
 
-    import tkinter as tk
-    from tkinter import messagebox
     if args.stop_all:
-        root = tk.Tk(className="cocohrip-stop")
-        root.withdraw()
-        stopped = stop_everything(cfg)
-        messagebox.showinfo("Robot apps", ("Stopped: " + ", ".join(stopped)) if stopped
-                            else "Nothing was running.", parent=root)
-        root.destroy()
+        def work():
+            stopped = stop_everything(cfg, log=lambda *a: None)
+            return ("Stopped: " + ", ".join(stopped) + ".") if stopped else "Nothing was running."
+        _note_window(ctk, "Stop robot apps", "", work)
         return 0
     if args.game not in cfg["games"]:
         ap.error(f"game must be one of {', '.join(cfg['games'])}")
     lock = _single_instance()
-    root = tk.Tk(className=f"cocohrip-{args.game}")
     if lock is None:
-        root.withdraw()
-        messagebox.showinfo("Robot cell", "The robot cell panel is already open.", parent=root)
-        root.destroy()
+        _note_window(ctk, "Already open", "The robot cell panel is already open.")
         return 1
-    here = os.path.dirname(os.path.abspath(__file__))
-    icon = os.path.join(here, "icons", f"{args.game}.png")
+    root = ctk.CTk(className=f"cocohrip-{args.game}")
+    icon = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons", f"{args.game}.png")
     if os.path.exists(icon):
         try:
+            import tkinter as tk
             root.iconphoto(True, tk.PhotoImage(file=icon))
-        except tk.TclError:
+        except Exception:                       # noqa: BLE001
             pass
-    Panel(root, cfg, args.game)
+    Panel(root, cfg, args.game, ctk)
     root.mainloop()
     return 0
 

@@ -12,9 +12,12 @@ DEST=$HOME/.local/share/cocohrip/launcher
 APPS=$HOME/.local/share/applications
 DESKTOP=$(xdg-user-dir DESKTOP 2>/dev/null || echo "$HOME/Desktop")
 
-echo "== python3-tk (the panel's window)"
-if python3 -c "import tkinter" 2>/dev/null; then echo "   installed"
-else sudo apt-get install -y python3-tk
+echo "== python3-tk, Pillow, CustomTkinter (the panel's window)"
+python3 -c "import tkinter" 2>/dev/null || sudo apt-get install -y python3-tk
+python3 -c "import PIL.ImageTk" 2>/dev/null || sudo apt-get install -y python3-pil python3-pil.imagetk
+python3 -m pip --version >/dev/null 2>&1 || sudo apt-get install -y python3-pip
+if python3 -c "import customtkinter" 2>/dev/null; then echo "   installed"
+else python3 -m pip install --user --break-system-packages "customtkinter>=5.2,<7"
 fi
 
 echo "== panel -> $DEST"

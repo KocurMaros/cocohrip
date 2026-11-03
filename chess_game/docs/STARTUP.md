@@ -34,8 +34,8 @@ but it reads each board in ~0.5 s instead of ~0.05 s.
 
 **Easiest:** double-click **Chess robot** on the desktop. The panel starts
 the three parts below in order, says what the robot still needs (brakes, ▶
-on the pendant, ...), lets you choose the opponent and level, and has
-**Stop everything**. See `launcher/README.md`; to install the icons once,
+on the pendant, ...) and lets you choose the opponent and level; **Stop**
+ends it all. See `launcher/README.md`; to install the icons once,
 run `bash ~/chess_ws/src/cocohrip/launcher/install.sh` in the desktop session.
 
 By hand, in 3 terminals:
