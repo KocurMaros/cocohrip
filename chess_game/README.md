@@ -41,7 +41,7 @@ already done are skipped, and it finishes by testing the three engines.
 Without Stockfish the node falls back to the built-in engine. Datasets
 (`~/chess_dataset`) and models (`~/chess_models`) are not in git either.
 
-Another chess set: see [docs/NEW_PIECE_SET.md](docs/NEW_PIECE_SET.md). Picking this up: [HANDOFF.md](HANDOFF.md).
+**Start, play, stop: [docs/STARTUP.md](docs/STARTUP.md).** Another chess set: [docs/NEW_PIECE_SET.md](docs/NEW_PIECE_SET.md). Picking this up: [HANDOFF.md](HANDOFF.md).
 
 ## The camera
 

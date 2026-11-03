@@ -3,7 +3,8 @@
 Goal: the checkers app, but chess. The human plays against the UR5e with a
 Hand-E gripper; a Ximea camera reads the board. Branch **`feat/chess`**
 (based on main, which includes adaptive_pieces). Design and commands:
-[README.md](README.md). Another piece set: [docs/NEW_PIECE_SET.md](docs/NEW_PIECE_SET.md).
+[README.md](README.md). Start / play / stop on the cell: [docs/STARTUP.md](docs/STARTUP.md).
+Another piece set: [docs/NEW_PIECE_SET.md](docs/NEW_PIECE_SET.md).
 
 ## Where things are
 
