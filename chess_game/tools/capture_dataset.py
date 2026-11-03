@@ -37,6 +37,7 @@ import os
 import sys
 import time
 
+import chess
 import cv2
 import numpy as np
 
@@ -245,10 +246,29 @@ class Recorder:
         if ins.kind == "game" and self.planner.game_state is not None:
             board, human_white = self.planner.game_state     # position before the move
             extra = {"uci": ins.move.uci(), "fen_before": board.fen(), "human_white": human_white}
+        shots = []
+        for k, factor in enumerate(BRACKET):
+            exp = self.cam.set_exposure(base * factor)
+            shots.append((exp, self.cam.grab_fresh()))
+        self.cam.set_exposure(base)
+        after_img = self.cam.grab_fresh(flush=3)  # flushes frames with the bracket's last exposure
+        # the board must look the same before, at the first exposure and after
+        # the series - otherwise a hand came in: throw the photos away
+        first = work_image(shots[0][1])
+        # (twice the move threshold: a hand scores far higher, lighting noise lower)
+        jump = np.maximum(self.detector.scores(work, first),
+                          self.detector.scores(first, work_image(after_img)))
+        moved = set(np.flatnonzero(jump > 2 * self.threshold).tolist())
+        if moved:
+            self.status = ("something moved during the photos (" + ", ".join(
+                chess.square_name(q) for q in sorted(moved)) + ") - keep hands away, retaking")
+            print(f"[retake] board changed during the photos on {sorted(moved)}")
+            self.prev_small = None
+            self.matches = 0
+            self.still_since = time.time()
+            return
         with open(self.labels_path, "a") as f:
-            for k, factor in enumerate(BRACKET):
-                exp = self.cam.set_exposure(base * factor)
-                img = self.cam.grab_fresh()
+            for k, (exp, img) in enumerate(shots):
                 name = f"{step:05d}_e{k}.jpg"
                 cv2.imwrite(os.path.join(self.dir, name), img, [cv2.IMWRITE_JPEG_QUALITY, 93])
                 files.append(name)
@@ -257,10 +277,7 @@ class Recorder:
                                    time=time.time(), gain_db=round(self.cam.gain_db, 2),
                                    trigger=trigger, **extra)
                 f.write(json.dumps(rec) + "\n")
-                if k == 0:
-                    self.ref = work_image(img)
-        self.cam.set_exposure(base)
-        self.cam.grab_fresh(flush=3)      # frames still exposed with the bracket's last value
+        self.ref = first
         self.last_files = files
         if self.retake is None:
             self.planner.accept()
