@@ -324,7 +324,9 @@ def main():
 
     model.load_state_dict(best_state)
     metrics, logits, y = evaluate(model, val_dl, device, val_recs)
-    temperature = fit_temperature(logits, y)
+    # temperature scaling needs mistakes to calibrate on: with (almost) none
+    # it collapses towards 0 (absurdly confident) - keep it in [0.5, 2]
+    temperature = float(np.clip(fit_temperature(logits, y), 0.5, 2.0))
     torch.save(best_state, os.path.join(out, "piece_classifier.pt"))
     diff = export_onnx(model, os.path.join(out, "piece_classifier.onnx"), device)
     meta = {"classes": CLASSES, "arch": args.arch, "crop": CROP, "work_scale": WORK_SCALE,
