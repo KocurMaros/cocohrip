@@ -14,6 +14,7 @@
 import os
 import random
 import sys
+import time
 import types
 
 import chess
@@ -26,6 +27,10 @@ from test_dataset import FIXTURE_CORNERS  # noqa: E402
 
 
 # ---------------------------------------------------------------- stubs
+# the board is read synchronously in the simulation (no reader thread)
+PARAM_OVERRIDES = {"threaded_reading": False}
+
+
 class _Pub:
     def __init__(self):
         self.msgs = []
@@ -39,7 +44,7 @@ class _Node:
         self._params, self.pubs, self.subs = {}, {}, {}
 
     def declare_parameter(self, n, v):
-        self._params[n] = v
+        self._params[n] = PARAM_OVERRIDES.get(n, v)
 
     def get_parameter(self, n):
         return types.SimpleNamespace(value=self._params[n])
@@ -148,6 +153,7 @@ def run_game(monkeypatch, seed, human_white, engine="random", max_plies=80, colo
             pass
 
         def grab(self, *a):
+            time.sleep(0.02)                     # a real camera blocks until the next frame
             return world.frame()
 
         def auto_expose(self, measure, **kw):
@@ -176,15 +182,17 @@ def run_game(monkeypatch, seed, human_white, engine="random", max_plies=80, colo
     node = chess_node.ChessNode()
     node._params = None
     node.stable_time = 0.0
+    node.hand_cooldown = 0.0
     node.colour_only = colour_only
     node.frames_per_read = frames_per_read
+    node.reader.needed = frames_per_read
     node.engine = chess_node.create_engine(engine)
     node.engine.rng = random.Random(seed) if hasattr(node.engine, "rng") else None
 
     def tick(n=3 + 2 * frames_per_read):
         for _ in range(n):
             with node.lock:
-                node.latest = world.frame()
+                node.latest = (world.frame(), time.time())
             node.update()
 
     def game_to_place(row, col):

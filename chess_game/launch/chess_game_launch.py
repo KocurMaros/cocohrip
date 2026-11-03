@@ -32,7 +32,8 @@ def generate_launch_description():
                 'colour_only': ParameterValue(LaunchConfiguration('colour_only'), value_type=bool),
                 'pieces_yaml': ParameterValue(LaunchConfiguration('pieces_yaml'), value_type=str),
                 'ai_time_limit': 2.0,     # s per robot move
-                'stable_time': 0.8,       # s the board must be still before it is read
+                'stable_time': 0.5,       # s the board must be still before a move is accepted
+                'hand_cooldown': 0.5,     # s without a hand over the board
                 'frames_per_read': 3,     # still frames averaged per board reading
                 'match_on_colours': True, # moves from empty / white / black (robust in new light)
                 # storage for captured pieces: one column left, one right of the board

@@ -9,9 +9,12 @@ Game flow
    rank-1 side, opposite the robot) is yours; with black on your side the
    robot (white) moves first.  F starts from whatever position is on the
    board (C switches your colour for that, you move first).
-3. YOUR MOVE: move, take your hand away.  When the board has been still
-   for ``stable_time`` the camera's probabilities for all 64 squares are
-   matched against every legal move.  Captured robot pieces you take off
+3. YOUR MOVE: move, take your hand away.  A background reader
+   (vision/reader.py) classifies every still frame; once the board has been
+   still for ``stable_time`` (0.5 s) and the last 3 readings agree, the
+   empty / white / black probabilities of all 64 squares are matched
+   against every legal move - about 0.6 s after the hand leaves with the
+   classifier on the GPU.  Captured robot pieces you take off
    yourself.  A pawn reaching the last rank stays a pawn on the board; in
    the game it is a queen (P cycles the piece) - the dashboard marks it.
 4. ROBOT: the engine picks a move, robot_control executes the pick/place
@@ -51,6 +54,7 @@ from chess_game.vision import board_setup
 from chess_game.vision.board_model import BoardModel, load_intrinsics
 from chess_game.vision.camera import ChessCamera, to_display, white_level
 from chess_game.vision.classifier import SquareClassifier, work_image
+from chess_game.vision.reader import BoardReader
 
 try:
     from checkers_game.ui.dashboard import Dashboard
@@ -84,7 +88,12 @@ class ChessNode(Node):
         p('ai_time_limit', 2.0)
         p('model_path', '~/chess_models/latest/piece_classifier.onnx')
         p('pieces_yaml', '')                # '' = the package's config/pieces.yaml
-        p('stable_time', 0.8)
+        # the board is accepted once still this long (and no hand seen for
+        # hand_cooldown); it is read in the background meanwhile, so there is
+        # no extra wait for the classifier
+        p('stable_time', 0.5)
+        p('hand_cooldown', 0.5)
+        p('threaded_reading', True)
         p('motion_threshold', 1.0)          # % changed pixels that count as motion
         p('a1_corner', 'BR')                # raw image corner of printed a1
         # True: use only empty / white / black from the classifier (e.g. a new
@@ -136,7 +145,7 @@ class ChessNode(Node):
         model_path = os.path.expanduser(g('model_path').value)
         try:
             self.classifier = SquareClassifier(model_path)
-            print(f"Piece classifier: {model_path}")
+            print(f"Piece classifier: {model_path} ({getattr(self.classifier, 'backend', '?')})")
         except FileNotFoundError as e:
             self.classifier = None
             print(f"✗ {e}\n  The camera view works, but no game can be played without it.")
@@ -168,8 +177,12 @@ class ChessNode(Node):
         self.force_check = False
         self.frames_per_read = max(1, int(g('frames_per_read').value))
         self.match_on_colours = bool(g('match_on_colours').value)
-        self._reads = []                    # probabilities of the current still period
-        self._reads_since = 0.0
+        self.hand_cooldown = float(g('hand_cooldown').value)
+        self.reader = None
+        if self.classifier is not None:
+            self.reader = BoardReader(lambda image: self.classifier.classify(image, self.model),
+                                      needed=self.frames_per_read,
+                                      threaded=bool(g('threaded_reading').value))
         self.hands = mp.solutions.hands.Hands(max_num_hands=2, model_complexity=0) if mp else None
 
         self.banner = ("Set up the pieces (your colour on your side), then press S", "info")
@@ -194,7 +207,7 @@ class ChessNode(Node):
             try:
                 frame = self.camera.grab()
                 with self.lock:
-                    self.latest = frame
+                    self.latest = (frame, time.time())
             except Exception as e:  # noqa: BLE001
                 self.get_logger().error(f"camera: {e}")
                 time.sleep(0.2)
@@ -202,7 +215,13 @@ class ChessNode(Node):
     def _settled(self):
         now = time.time()
         return (now - self.last_motion >= self.stable_time
-                and now - self.last_hand >= max(0.7, self.stable_time))
+                and now - self.last_hand >= self.hand_cooldown)
+
+    def _disturbed(self, t=None):
+        """Motion / a hand / an exposure change: the board must be read anew."""
+        t = time.time() if t is None else t
+        if self.reader is not None:
+            self.reader.disturbed(t)
 
     def _track_motion(self, work):
         small = cv2.GaussianBlur(cv2.cvtColor(cv2.resize(work, (200, 167)), cv2.COLOR_BGR2GRAY),
@@ -211,6 +230,7 @@ class ChessNode(Node):
             self.motion = float((cv2.absdiff(small, self.prev_small) > 25).mean() * 100)
             if self.motion > self.motion_threshold:
                 self.last_motion = time.time()
+                self._disturbed(self.last_motion)
         self.prev_small = small
 
     # ------------------------------------------------------------ main loop
@@ -219,9 +239,10 @@ class ChessNode(Node):
             self._shutdown()                    # window closed
             return
         with self.lock:
-            frame = self.latest
-        if frame is None:
+            latest = self.latest
+        if latest is None:
             return
+        frame, frame_t = latest
         work = work_image(frame)
         self._track_motion(work)
         if self._settled() and self.state != State.ROBOT_MOVING:
@@ -229,21 +250,20 @@ class ChessNode(Node):
         hand, cam_tile = self._hands(work)
         if hand:
             self.last_hand = time.time()
+            self._disturbed(self.last_hand)
+        if self.reader is not None:
+            self.reader.offer(work, frame_t)    # read in the background while still
 
         new_obs = False
-        if self._reads and self.last_motion > self._reads_since:
-            self._reads = []                # the board moved: start the reading again
-        if self.classifier is not None and self._settled() and (
-                self.obs_time < self.last_motion or self.force_check):
-            if not self._reads:
-                self._reads_since = time.time()
-            self._reads.append(self.classifier.classify(work, self.model))
-            if len(self._reads) >= self.frames_per_read:
+        if self.reader is not None and self._settled():
+            obs = self.reader.result()
+            # read again after motion (or SPACE) - and also when the still
+            # board is read with other colours than last time (a move made
+            # so carefully that it did not count as motion)
+            fresh = self.obs_time < self.last_motion or self.force_check
+            if obs is not None and (fresh or self._colours_differ(obs)):
                 self.force_check = False
-                self.obs = np.mean(self._reads, axis=0)
-                self._reads = []
-                if self.colour_only:
-                    self.obs = collapse_to_colour(self.obs)
+                self.obs = collapse_to_colour(obs) if self.colour_only else obs
                 self.obs_time = time.time()
                 new_obs = True
 
@@ -261,6 +281,13 @@ class ChessNode(Node):
                 self._robot_finished()
         self._draw(work, cam_tile)
 
+    def _colours_differ(self, obs):
+        if self.obs is None:
+            return True
+        a = obs if obs.shape[1] == 3 else collapse_to_colour(obs)
+        b = self.obs if self.obs.shape[1] == 3 else collapse_to_colour(self.obs)
+        return not np.array_equal(a.argmax(axis=1), b.argmax(axis=1))
+
     def _track_exposure(self, work, every=2.0):
         """Follow lighting changes (lamp on/off): gentle correction when the
         board's white squares leave [140, 235]."""
@@ -277,6 +304,7 @@ class ChessNode(Node):
             print(f"[camera] lighting changed (white level {level:.0f}): exposure {old[0]} us "
                   f"+{old[1]:.0f} dB -> {new[0]} us +{new[1]:.0f} dB")
             self.last_motion = time.time()      # re-read the board with the new exposure
+            self._disturbed(self.last_motion)
 
     # ------------------------------------------------------------ keys
     def _key(self, key):
@@ -550,7 +578,8 @@ class ChessNode(Node):
                                      title="what the camera sees - press S to start")
         det_img = draw_diagram(detected, 288, marks=unsure, title="camera")
         now = time.time()
-        settled = min(now - self.last_motion, now - self.last_hand + self.stable_time - 0.7)
+        settled = min(now - self.last_motion,
+                      now - self.last_hand + self.stable_time - self.hand_cooldown)
         colour = "-" if not self.game.started else ("WHITE" if self.game.human_white else "BLACK")
         facts = [("you play", colour), ("engine", f"{self.engine.name} L{self.level}"),
                  ("promote to", chess.piece_name(self.game.promotion_piece)),
@@ -565,11 +594,46 @@ class ChessNode(Node):
             canvas = self.dashboard.render(board_img, cam_tile, det_img, status)
         else:
             canvas = np.hstack([board_img, cv2.resize(cam_tile, (588, 704))])
+        self._draw_activity(canvas, now)
         cv2.imshow(WINDOW, canvas)
         self.window_open = True
 
+    def _activity(self, now):
+        """(text, spinning) shown at the right of the banner: what the system
+        is doing while the human waits."""
+        if self.state == State.ROBOT_THINKING:
+            return "robot is thinking", True
+        if self.state == State.ROBOT_MOVING:
+            return "robot is moving", True
+        if self.state not in (State.HUMAN_TURN, State.WAITING_FOR_START) or self.reader is None:
+            return "", False
+        if now - self.last_hand < 0.3:
+            return "hand over the board", False
+        if self.obs_time < self.last_motion and now - self.last_motion < 20:
+            return "reading the board", True        # moved, not read yet
+        return "", False
+
+    def _draw_activity(self, canvas, now):
+        text, spinning = self._activity(now)
+        if not text:
+            return
+        w = canvas.shape[1]
+        cx, cy, r = w - 34, 28, 14
+        (tw, _), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.65, 2)
+        x = cx - r - 14 - tw
+        cv2.putText(canvas, text, (x, cy + 7), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2,
+                    cv2.LINE_AA)
+        if spinning:                                 # a turning arc
+            start = int((now * 300) % 360)
+            cv2.ellipse(canvas, (cx, cy), (r, r), 0, start, start + 270, (255, 255, 255), 3,
+                        cv2.LINE_AA)
+        else:
+            cv2.circle(canvas, (cx, cy), r // 2, (0, 200, 255), -1, cv2.LINE_AA)
+
     def _shutdown(self):
         self.capturing = False
+        if self.reader is not None:
+            self.reader.stop()
         try:
             self.engine.close()
             self.camera.close()
