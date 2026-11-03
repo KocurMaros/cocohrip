@@ -1,3 +1,5 @@
+// EASIEST: desktop icon "Checkers robot" (starts and stops all of the below; launcher/README.md)
+//   install once / after updates, in the desktop session: bash launcher/install.sh
 // build: in a NEW terminal (only ROS Jazzy sourced, never another workspace)
 cd ~/checkers_ws && colcon build
 // run: each command in its own NEW terminal (or ./clean_shell.sh for a guaranteed clean one)

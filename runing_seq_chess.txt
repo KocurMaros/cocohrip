@@ -1,0 +1,33 @@
+// CHESS - everything from ~/chess_ws (checkers stays in ~/checkers_ws: never mix them in one terminal)
+// details: chess_game/docs/STARTUP.md
+// EASIEST: desktop icon "Chess robot" (starts and stops all of the below; launcher/README.md)
+//   install once / after updates, in the desktop session: bash ~/chess_ws/src/cocohrip/launcher/install.sh
+
+// update + build: in a NEW terminal (only ROS Jazzy sourced, never another workspace)
+cd ~/chess_ws/src/cocohrip && git pull
+cd ~/chess_ws && colcon build
+// once / after git pull: engines, GPU runtime for the classifier (skips what is installed)
+bash ~/chess_ws/src/cocohrip/chess_game/tools/install.sh
+// which piece classifier the game loads (newest: final_v3)
+ln -sfn ~/chess_models/final_v3 ~/chess_models/latest
+
+// robot: power on, release brakes, start External Control on the pendant; E-stop ready
+// camera must be on a USB 3 port: lsusb -t  ->  5000M (480M = wrong port, no frames)
+// if needed only after rebooting computer
+sudo tee /sys/module/usbcore/parameters/usbfs_memory_mb >/dev/null <<<0
+
+// run: each command in its own NEW terminal
+source ~/chess_ws/install/setup.bash && ros2 launch cocohrip_control bringup_all.launch.py
+source ~/chess_ws/install/setup.bash && ros2 launch robot_control new_launch.py
+source ~/chess_ws/install/setup.bash && ros2 launch chess_game chess_game_launch.py engine:=stockfish level:=3
+//   engine: builtin | maia | stockfish | leela    level 1..5 (approx. Elo shown in the game window)
+//   e.g. maia 1..5 = 1100..1900 (human-like), stockfish 1..5 = ~1000 1350 1600 2000 ~3500
+
+// play: your colour on your side (printed ranks 1-2), S = start, move + take the hand away
+// keys: S start  F from position  1-5 level  E next engine  SPACE re-read  R robot done  L lock  H hints  Q quit
+
+// stop: Q in the Chess window, Ctrl+C in the other terminals, robot off on the pendant
+
+// debugging
+ros2 topic echo /chess/robot_move      // the pick/place steps sent to the robot
+ros2 topic echo /chess/state           // FEN of the game
