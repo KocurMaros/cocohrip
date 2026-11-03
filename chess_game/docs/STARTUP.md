@@ -41,12 +41,13 @@ source ~/chess_ws/install/setup.bash && ros2 launch robot_control new_launch.py
 source ~/chess_ws/install/setup.bash && ros2 launch chess_game chess_game_launch.py engine:=stockfish level:=3
 ```
 
-Engine choices:
-- `engine:=stockfish`: levels 1..5 set the skill.
+Engine choices (the window shows the level's rough Elo):
+- `engine:=builtin`: simple search, ~700..1300.
 - `engine:=maia`: plays like a human; levels 1..5 = rating 1100..1900.
-- `engine:=leela`: levels 1..5 set the search size.
+- `engine:=stockfish`: ~1000, 1350, 1600, 2000, full strength.
+- `engine:=leela`: strong neural network, ~2000..3100.
 
-The level can also be changed in the game with keys 1..5. The node loads the
+In the game, **E** switches the engine and **1..5** the level. The node loads the
 piece classifier from `~/chess_models/latest`, and finds the board by itself
 (the corners are cached in `~/.cocohrip/chess_board.json`). If it cannot, it
 asks you to click the corners of a1, a8, h8, h1.
@@ -72,7 +73,8 @@ asks you to click the corners of a1, a8, h8, h1.
 |---|---|
 | S | start (start position on the board) |
 | F | start from whatever position is on the board (**C** = your colour for F) |
-| 1..5 | engine level |
+| 1..5 | engine level (rough Elo shown) |
+| E | next engine: simple, Maia, Stockfish, Leela |
 | SPACE | read the board again now |
 | R | the robot has finished (if it did not report) |
 | L | unlocked: the game also continues when the camera sees the robot's move done |

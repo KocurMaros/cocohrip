@@ -7,7 +7,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 def generate_launch_description():
     args = [
-        # stockfish | leela | maia (level = Maia 1100..1900) | lc0:weights=... | uci:/path | builtin
+        # builtin | maia | stockfish | leela | lc0:weights=... | uci:/path  (Elo: engines.APPROX_ELO)
         DeclareLaunchArgument('engine', default_value='stockfish'),
         DeclareLaunchArgument('level', default_value='3'),
         DeclareLaunchArgument('model_path',

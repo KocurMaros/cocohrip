@@ -27,7 +27,7 @@ Game flow
    repetition end the game.
 
 Keys (window focused): S start, F start from this position, C your colour
-for F, 1-5 engine level, P promotion piece, SPACE re-check now, R robot
+for F, 1-5 engine level, E next engine (opponent), P promotion piece, SPACE re-check now, R robot
 finished, L lock/unlock, H your legal moves, Q quit.
 """
 
@@ -45,7 +45,9 @@ from rclpy.node import Node
 from checkers_msgs.msg import RobotMove
 from chess_msgs.msg import ChessRobotMove, ChessState, PickPlace
 
-from chess_game.engines import create_engine
+import chess.engine
+
+from chess_game.engines import CHOICES, create_engine, describe
 from chess_game.frames import OffBoardLayout, logical_to_printed
 from chess_game.game import CLASSES, COLOURS, ChessGame, collapse_to_colour
 from chess_game.robot_steps import load_pieces, robot_geometry
@@ -150,7 +152,7 @@ class ChessNode(Node):
             self.classifier = None
             print(f"✗ {e}\n  The camera view works, but no game can be played without it.")
         self.engine = create_engine(g('engine').value)
-        print(f"Engine: {self.engine.name}, level {self.level}")
+        print(f"Engine: {describe(self.engine.name, self.level)}")
 
         self.colour_only = bool(g('colour_only').value)
         if self.colour_only:
@@ -198,7 +200,7 @@ class ChessNode(Node):
         cv2.resizeWindow(WINDOW, 1320, 780)
         self.window_open = False
         self.last_exposure_check = 0.0
-        print("Keys: S start  F start from this position  C colour for F  1-5 level  "
+        print("Keys: S start  F start from this position  C colour for F  1-5 level  E engine  "
               "P promotion piece\n      SPACE re-check  R robot done  L lock/unlock  H hints  Q quit")
 
     # ------------------------------------------------------------ camera
@@ -311,7 +313,9 @@ class ChessNode(Node):
         k = chr(key).lower() if key < 128 else ""
         if k and k in "12345":
             self.level = int(k)
-            self.details = [f"Engine level {self.level}"]
+            self.details = [f"Opponent: {describe(self.engine.name, self.level)}"]
+        elif k == "e":
+            self._next_engine()
         elif k == "s":
             self._start(from_position=False)
         elif k == "f":
@@ -338,6 +342,28 @@ class ChessNode(Node):
             self.details = ["Your legal moves:", " ".join(sans)]
         elif k == "q":
             self._shutdown()
+
+    def _next_engine(self):
+        """Switch to the next opponent in CHOICES that can be started."""
+        if self.state in (State.ROBOT_THINKING, State.ROBOT_MOVING):
+            self.details = ["Change the engine when it is your turn"]
+            return
+        names = list(CHOICES)
+        i = names.index(self.engine.name) if self.engine.name in names else -1
+        for name in names[i + 1:] + names[:i + 1]:
+            if name == self.engine.name:
+                break
+            try:
+                new = create_engine(name, fallback=None)
+            except (OSError, ValueError, chess.engine.EngineError) as e:
+                print(f"[engine] {name} not available ({e}) - skipped")
+                continue
+            self.engine.close()
+            self.engine = new
+            break
+        print(f"Engine: {describe(self.engine.name, self.level)}")
+        self.details = [f"Opponent: {describe(self.engine.name, self.level)}",
+                        "E = next engine, 1-5 = level"]
 
     # ------------------------------------------------------------ start
     def _start(self, from_position):
@@ -368,7 +394,7 @@ class ChessNode(Node):
         self.last_move = None
         self.verify_after_robot = False
         side = "WHITE" if self.game.human_white else "BLACK"
-        print(f"\nGAME STARTED - you play {side}, engine {self.engine.name} level {self.level}")
+        print(f"\nGAME STARTED - you play {side}, opponent {describe(self.engine.name, self.level)}")
         self._publish_state()
         start_details = [f"Game started - you play {side}."]
         if warning:
@@ -581,7 +607,7 @@ class ChessNode(Node):
         settled = min(now - self.last_motion,
                       now - self.last_hand + self.stable_time - self.hand_cooldown)
         colour = "-" if not self.game.started else ("WHITE" if self.game.human_white else "BLACK")
-        facts = [("you play", colour), ("engine", f"{self.engine.name} L{self.level}"),
+        facts = [("you play", colour), ("engine", describe(self.engine.name, self.level, short=True)),
                  ("promote to", chess.piece_name(self.game.promotion_piece)),
                  ("exposure", f"{self.camera.exposure_us / 1000:.0f} ms +{self.camera.gain_db:.0f} dB"),
                  ("unsure sq.", len(unsure)), ("motion", f"{self.motion:.1f} %"),
@@ -589,7 +615,7 @@ class ChessNode(Node):
                  ("state", self.state.name.lower().replace("_", " "))]
         status = {"banner": self.banner, "details": self.details, "facts": facts,
                   "stability": settled / max(self.stable_time, 1e-3), "log": self.game.move_pairs(),
-                  "keys": "S start F force C colour 1-5 level P promo SPACE check R done L lock H Q"}
+                  "keys": "S start F force C colour 1-5 level E engine P promo SPACE check R done L H Q"}
         if self.dashboard is not None:
             canvas = self.dashboard.render(board_img, cam_tile, det_img, status)
         else:

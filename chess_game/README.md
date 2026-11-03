@@ -95,7 +95,20 @@ ros2 launch chess_game chess_game_launch.py engine:=stockfish level:=3
 #   engine: stockfish | leela | maia | lc0:weights=... | uci:/path/to/engine | builtin
 ```
 
-`level` 1..5: Stockfish skill, Leela search size, Maia rating 1100..1900.
+`level` 1..5; in the game **E** switches the opponent and **1..5** the level.
+Rough strength (Elo) shown in the game:
+
+| level | 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|
+| `builtin` (simple search) | ~700 | ~900 | ~1100 | ~1200 | ~1300 |
+| `maia` (plays like humans of that Lichess rating) | 1100 | 1300 | 1500 | 1700 | 1900 |
+| `stockfish` | ~1000 | 1350 | 1600 | 2000 | ~3500 (full) |
+| `leela` (T1-256x10 net, 1..4000 nodes) | ~2000 | ~2300 | ~2600 | ~2900 | ~3100 |
+
+Stockfish 2..4 use its own calibrated strength limit (`UCI_Elo`, computer
+rating list scale); Maia's numbers are the human ratings it imitates; the
+others (`~`) are estimates, not measured on this robot. Table in
+`engines.py` (`APPROX_ELO`).
 `colour_only:=true` uses the classifier for empty / white / black only (a set
 it was not trained on), and `pieces_yaml:=` selects another set's sizes.
 

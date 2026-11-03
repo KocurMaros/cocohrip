@@ -5,7 +5,8 @@
     engine.close()
 
 * ``stockfish`` - any UCI binary on PATH (or ``stockfish:/path/to/binary``);
-  the level (1..5) sets Stockfish's "Skill Level".
+  level 1 = "Skill Level" 0 at depth 1, levels 2..4 = Stockfish's own
+  strength limit (UCI_Elo 1350 / 1600 / 2000), level 5 = full strength.
 * ``leela`` - Leela Chess Zero (lc0, a neural-network engine) with the net
   ``~/chess_engines/leela.pb.gz``; the level sets the search size (1 node =
   the network's instinct ... 4000 nodes).
@@ -34,6 +35,38 @@ import chess
 import chess.engine
 
 LEVELS = (1, 2, 3, 4, 5)
+
+# The opponents offered in the game (key E) and the launcher, weakest first.
+CHOICES = ("builtin", "maia", "stockfish", "leela")
+TITLES = {"stockfish": "Stockfish", "maia": "Maia (human-like)", "leela": "Leela",
+          "builtin": "Simple (built-in)", "random": "Random moves"}
+STOCKFISH_ELO = {2: 1350, 3: 1600, 4: 2000}
+MAIA_RATINGS = {1: 1100, 2: 1300, 3: 1500, 4: 1700, 5: 1900}
+LEELA_NODES = {1: 1, 2: 16, 3: 128, 4: 800, 5: 4000}
+# Rough playing strength per level (Elo), to choose an opponent - ballpark
+# figures, not measurements.  Stockfish 2..4: its own calibration (UCI_Elo,
+# computer rating list scale).  Maia: the Lichess rating of the human
+# players the net imitates.  Stockfish 1 and 5, Leela (the small T1-256x10
+# net, 1..4000 nodes) and the built-in search: estimates.
+APPROX_ELO = {
+    "builtin": {1: 700, 2: 900, 3: 1100, 4: 1200, 5: 1300},
+    "maia": dict(MAIA_RATINGS),
+    "stockfish": {1: 1000, **STOCKFISH_ELO, 5: 3500},
+    "leela": {1: 2000, 2: 2300, 3: 2600, 4: 2900, 5: 3100},
+}
+
+
+def approx_elo(name, level):
+    """Rough strength of engine `name` at `level`, or None if unknown."""
+    return APPROX_ELO.get(name, {}).get(int(level))
+
+
+def describe(name, level, short=False):
+    """"Stockfish level 3 (~1600 Elo)" / short: "stockfish L3 ~1600"."""
+    elo = approx_elo(name, level)
+    if short:
+        return f"{name} L{level}" + (f" ~{elo}" if elo else "")
+    return f"{TITLES.get(name, name)} level {level}" + (f" (~{elo} Elo)" if elo else "")
 
 
 class Engine:
@@ -100,17 +133,16 @@ class UciEngine(Engine):
 
 def stockfish(command=None):
     command = command or shutil.which("stockfish") or "/usr/games/stockfish"
-    skill = {1: 0, 2: 4, 3: 8, 4: 14, 5: 20}
-    depth = {1: 1, 2: 3, 3: 6, 4: 10}
+    full = {"UCI_LimitStrength": False, "Skill Level": 20}
+    level_options = {1: {"UCI_LimitStrength": False, "Skill Level": 0}, 5: full}
+    for lv, elo in STOCKFISH_ELO.items():       # Stockfish's calibrated strength limit
+        level_options[lv] = {"Skill Level": 20, "UCI_LimitStrength": True, "UCI_Elo": elo}
     return UciEngine(command, options={"Threads": 2, "Hash": 64},
-                     level_options={lv: {"Skill Level": s} for lv, s in skill.items()},
-                     level_limits={lv: {"depth": d} for lv, d in depth.items()},
+                     level_options=level_options, level_limits={1: {"depth": 1}},
                      name="stockfish")
 
 
 NET_DIR = os.path.expanduser("~/chess_engines")
-MAIA_RATINGS = {1: 1100, 2: 1300, 3: 1500, 4: 1700, 5: 1900}
-LEELA_NODES = {1: 1, 2: 16, 3: 128, 4: 800, 5: 4000}
 
 
 def _lc0_command(command):

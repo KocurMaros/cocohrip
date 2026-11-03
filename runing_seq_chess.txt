@@ -18,10 +18,11 @@ sudo tee /sys/module/usbcore/parameters/usbfs_memory_mb >/dev/null <<<0
 source ~/chess_ws/install/setup.bash && ros2 launch cocohrip_control bringup_all.launch.py
 source ~/chess_ws/install/setup.bash && ros2 launch robot_control new_launch.py
 source ~/chess_ws/install/setup.bash && ros2 launch chess_game chess_game_launch.py engine:=stockfish level:=3
-//   engine: stockfish | maia (level 1..5 = rating 1100..1900) | leela | builtin
+//   engine: builtin | maia | stockfish | leela    level 1..5 (approx. Elo shown in the game window)
+//   e.g. maia 1..5 = 1100..1900 (human-like), stockfish 1..5 = ~1000 1350 1600 2000 ~3500
 
 // play: your colour on your side (printed ranks 1-2), S = start, move + take the hand away
-// keys: S start  F from position  1-5 level  SPACE re-read  R robot done  L lock  H hints  Q quit
+// keys: S start  F from position  1-5 level  E next engine  SPACE re-read  R robot done  L lock  H hints  Q quit
 
 // stop: Q in the Chess window, Ctrl+C in the other terminals, robot off on the pendant
 

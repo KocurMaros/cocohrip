@@ -3,7 +3,8 @@ import shutil
 import chess
 import pytest
 
-from chess_game.engines import BuiltinEngine, RandomEngine, create_engine, evaluate
+from chess_game.engines import (CHOICES, LEVELS, BuiltinEngine, RandomEngine, approx_elo,
+                                create_engine, describe, evaluate)
 
 
 def test_evaluate_is_symmetric():
@@ -51,5 +52,14 @@ def test_random_and_factory_fallback():
 def test_stockfish_plays_every_level():
     board = chess.Board()
     with create_engine("stockfish", fallback=None) as eng:
-        for level in (1, 3, 5):
+        for level in LEVELS:
             assert eng.choose_move(board, level=level, time_limit=0.2) in board.legal_moves
+
+
+def test_every_offered_engine_has_an_elo_per_level_rising_with_the_level():
+    for name in CHOICES:
+        elos = [approx_elo(name, lv) for lv in LEVELS]
+        assert all(elos) and elos == sorted(elos), name
+    assert describe("stockfish", 3) == "Stockfish level 3 (~1600 Elo)"
+    assert describe("maia", 1, short=True) == "maia L1 ~1100"
+    assert describe("lc0", 2) == "lc0 level 2"
