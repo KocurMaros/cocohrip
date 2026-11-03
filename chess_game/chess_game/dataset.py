@@ -207,7 +207,9 @@ class DatasetPlanner:
             text += f"  and take the pawn on {sq(cap)} off (en passant)"
         elif board.is_capture(move):
             victim = board.piece_at(move.to_square).symbol()
-            text = f"Take the {piece_name(victim)} off {sq(move.to_square)}, then " + text[0].lower() + text[1:]
+            text = (f"{piece_name(piece)} {sq(move.from_square)} TAKES on {sq(move.to_square)}: "
+                    f"{piece_name(victim)} off the board, then {piece_name(piece)} "
+                    f"{sq(move.from_square)} -> {sq(move.to_square)}")
         return text
 
     def _scatter_step(self):

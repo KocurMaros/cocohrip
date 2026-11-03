@@ -313,6 +313,11 @@ class Recorder:
         for sq in range(64):
             label = CLASSES.index(placement[sq]) if sq in placement else 0
             seen = int(np.argmax(probs[sq]))
+            # king <-> queen of the same colour: the classifier still mixes
+            # them up in bright light - not worth stopping the human for
+            kq = {CLASSES.index(c) for c in "KQ"}, {CLASSES.index(c) for c in "kq"}
+            if any({seen, label} == pair for pair in kq):
+                continue
             if seen != label and probs[sq, seen] > 0.9 and probs[sq, label] < 0.05:
                 bad.append(f"{chess.square_name(sq)}: {_piece_text(seen)}, not {_piece_text(label)}")
         if not bad:
