@@ -37,6 +37,9 @@ def main():
     ap.add_argument("model")
     ap.add_argument("sessions", nargs="+")
     ap.add_argument("--show", action="store_true", help="save crops of wrong squares")
+    ap.add_argument("--val-only", action="store_true",
+                    help="only the photos train_classifier.py held out for validation "
+                         "(every 5th block of 25 positions) - honest numbers")
     args = ap.parse_args()
 
     clf = SquareClassifier(os.path.expanduser(args.model))
@@ -49,6 +52,8 @@ def main():
     for d in sessions:
         for rec in read_labels(os.path.join(d, "labels.jsonl")):
             if rec.get("exclude"):
+                continue
+            if args.val_only and (rec["step"] // 25) % 5 != 4:
                 continue
             img = cv2.imread(os.path.join(d, rec["image"]), cv2.IMREAD_REDUCED_COLOR_2)
             if img is None:
