@@ -95,6 +95,10 @@ class ChessNode(Node):
         # a board is read by averaging this many still frames (each one also
         # classified mirrored) - one bad frame or glare spot cannot decide
         p('frames_per_read', 3)
+        # match moves on empty / white / black only (piece types are what the
+        # classifier gets wrong first in light it has not seen; colours are
+        # enough to tell every legal move apart)
+        p('match_on_colours', True)
         p('storage_left_col', -1.8)
         p('storage_right_col', 8.8)
         p('storage_rows', 8)
@@ -163,6 +167,7 @@ class ChessNode(Node):
         self.obs_time = 0.0
         self.force_check = False
         self.frames_per_read = max(1, int(g('frames_per_read').value))
+        self.match_on_colours = bool(g('match_on_colours').value)
         self._reads = []                    # probabilities of the current still period
         self._reads_since = 0.0
         self.hands = mp.solutions.hands.Hands(max_num_hands=2, model_complexity=0) if mp else None
@@ -313,6 +318,7 @@ class ChessNode(Node):
         if self.obs is None:
             self._ui("The camera has not read the board yet - keep your hands off", "warn")
             return
+        warning = None
         if from_position:
             self.game.human_white = self.human_white_for_f
             ok, msg = self.game.start_from_observation(self.obs, human_to_move=True)
@@ -321,7 +327,10 @@ class ChessNode(Node):
                 return
         else:
             check = ChessGame.check_setup(self.obs)
-            if not check.ok:
+            if not check.ok and check.types_only and self.match_on_colours:
+                # colours are right: start anyway, only point at the doubtful pieces
+                warning = "Please check " + check.message.replace("wrong pieces - ", "")
+            elif not check.ok:
                 self.highlight = check.wrong
                 self._ui("Not the start position - fix it and press S", "error",
                          [check.message, "Or press F to start from the position on the board."])
@@ -333,15 +342,22 @@ class ChessNode(Node):
         side = "WHITE" if self.game.human_white else "BLACK"
         print(f"\nGAME STARTED - you play {side}, engine {self.engine.name} level {self.level}")
         self._publish_state()
+        start_details = [f"Game started - you play {side}."]
+        if warning:
+            start_details.append(warning)
+            print("  " + warning)
         if self.game.human_to_move:
             self.state = State.HUMAN_TURN
-            self._your_turn([f"Game started - you play {side}."])
+            self._your_turn(start_details)
         else:
             self._robot_turn()
 
     # ------------------------------------------------------------ human
     def _human_turn(self):
-        inf = self.game.infer_human_move(self.obs)
+        obs = self.obs
+        if self.match_on_colours and obs.shape[1] == len(CLASSES):
+            obs = collapse_to_colour(obs)
+        inf = self.game.infer_human_move(obs)
         if self.verify_after_robot:
             self.verify_after_robot = False
             if inf.kind == "no_change":

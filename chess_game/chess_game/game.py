@@ -148,6 +148,7 @@ class SetupCheck:
     human_white: bool
     message: str
     wrong: list = field(default_factory=list)      # printed squares
+    types_only: bool = False                       # colours fine, only piece types disagree
 
 
 # --------------------------------------------------------------------------
@@ -275,7 +276,8 @@ class ChessGame:
                 seen = {s: CLASSES[int(np.argmax(obs[s]))] for s in wrong}
                 text = ", ".join(f"{chess.square_name(s)}: {CLASSES[labels[s]]} expected, "
                                  f"looks like {seen[s]}" for s in wrong)
-                return SetupCheck(False, human_white, "wrong pieces - " + text, wrong)
+                return SetupCheck(False, human_white, "wrong pieces - " + text, wrong,
+                                  types_only=True)
         return SetupCheck(True, human_white, f"start position, you play {side}")
 
     # ------------------------------------------------------------ human move

@@ -242,3 +242,16 @@ def test_move_pairs():
     g.push(chess.Move.from_uci("e8d8"))
     g.push(chess.Move.from_uci("e1d1"))
     assert g.move_pairs() == ["... Kd8", "Kd1"]
+
+
+def test_check_setup_flags_type_only_problems():
+    board = chess.Board()
+    labels = labels_for(board, True)
+    labels[chess.B1], labels[chess.C1] = labels[chess.C1], labels[chess.B1]
+    res = ChessGame.check_setup(obs_from_labels(labels, 13))
+    assert not res.ok and res.types_only
+    labels = labels_for(board, True)
+    labels[chess.E4] = labels[chess.E2]
+    labels[chess.E2] = 0
+    res = ChessGame.check_setup(obs_from_labels(labels, 13))
+    assert not res.ok and not res.types_only
