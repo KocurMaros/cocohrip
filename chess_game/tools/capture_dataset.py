@@ -84,7 +84,8 @@ class Recorder:
             self.dir = os.path.expanduser(args.resume)
             labels = read_labels(os.path.join(self.dir, "labels.jsonl"))
             placement = placement_from_fen(labels[-1]["placement"]) if labels else {}
-            self.photos = len({r["step"] for r in labels})
+            # next photo number: after the highest one (deleted photos leave gaps)
+            self.photos = max((r["step"] for r in labels), default=-1) + 1
             self.lighting = args.lighting or (labels[-1]["lighting"] if labels else "normal")
         else:
             self.dir = os.path.join(os.path.expanduser(args.out), time.strftime("%Y%m%d_%H%M%S"))
