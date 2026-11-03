@@ -22,6 +22,8 @@ def generate_launch_description():
             executable='chess_node',
             name='chess_node',
             output='screen',
+            # print() lines appear in the console / log at once
+            additional_env={'PYTHONUNBUFFERED': '1'},
             parameters=[{
                 'engine': LaunchConfiguration('engine'),
                 'level': ParameterValue(LaunchConfiguration('level'), value_type=int),
