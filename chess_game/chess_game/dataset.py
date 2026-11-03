@@ -81,7 +81,7 @@ class DatasetPlanner:
     """Endless sequence of Instructions.  `coverage` counts how often each
     (symbol, square) has been photographed; feed it with record()."""
 
-    def __init__(self, placement=None, seed=None, game_plies=(20, 60), scatter_steps=(15, 30)):
+    def __init__(self, placement=None, seed=None, game_plies=(30, 70), scatter_steps=(25, 50)):
         self.rng = random.Random(seed)
         self.placement = dict(placement or {})
         self.coverage = Counter()
@@ -286,9 +286,14 @@ class ChangeDetector:
         return [int(q) for q in np.flatnonzero(s > self.threshold)], s
 
     def allowed(self, squares, height=1.8):
+        """Squares that may change too: what a tall piece hides, and the 8
+        neighbours (shadows of the moved piece under a lamp)."""
         out = set()
         for sq in squares:
             out.update(self.model.column_squares(sq, height))
+            f, r = sq % 8, sq // 8
+            out.update(rr * 8 + ff for rr in range(r - 1, r + 2) for ff in range(f - 1, f + 2)
+                       if 0 <= rr < 8 and 0 <= ff < 8)
         return out
 
 

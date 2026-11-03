@@ -51,11 +51,9 @@ has been executed by the real robot.
    hands over the board, lighting changes, failed grips.
 4. Piece centring from the camera (`PickPlace.offset_*` is always 0 now).
 5. Gripper rotation by the direction the knight's head faces (asked for by the user).
-6. **Explicit colour choice** (asked for by the user): let the player pick
-   white or black, e.g. W/B keys and a `human_color: auto|white|black` launch
-   parameter. The dashboard should then say how to set up the board, and S
-   should insist on that colour. Today the colour is only detected from which
-   pieces stand on the human's side at S (C picks it for F).
+6. **Player colour**: it must follow from where the pieces stand. That is
+   implemented: S detects the colour on the human's side (black = the robot
+   starts), and C picks it for F. Check it on the cell with both set-ups.
 7. Re-check checkers with the `9c2e372` fix, then a PR to main.
 
 ## Decisions agreed with the user
