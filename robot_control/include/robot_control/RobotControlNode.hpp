@@ -12,6 +12,7 @@
 #include "checkers_msgs/msg/hand_detected.hpp"
 #include "checkers_msgs/msg/robot_move.hpp"
 #include "checkers_msgs/srv/resume_movement.hpp"
+#include "chess_msgs/msg/chess_robot_move.hpp"
 #include <shape_msgs/msg/solid_primitive.hpp>
 #include <moveit_msgs/msg/object_color.hpp>
 #include <gripper_srv/srv/gripper_service.hpp>
@@ -50,7 +51,9 @@ public:
     void attachPiece();
     void detachPiece();
     void createPiece(int row, int col);
+    void createPieceAt(double x, double y);
     void createFakePieceWithColor(const std::string& object_id, int row, int col, const std::string& colorName);
+    void createFakePieceAt(const std::string& object_id, double x, double y, const std::string& colorName);
     std::tuple<float, float, float> getColorFromName(const std::string& colorName);
     void removePiece();
     void removeAllFakePieces();
@@ -98,6 +101,17 @@ private:
 
     rclcpp::Subscription<checkers_msgs::msg::Move>::SharedPtr checkersMoveSub;
     void checkers_move_callback(const checkers_msgs::msg::Move::SharedPtr msg);
+
+    // Chess: a list of pick/place steps with per-piece grip height / width
+    // and a travel height (chess_game decides; this node only executes)
+    rclcpp::Subscription<chess_msgs::msg::ChessRobotMove>::SharedPtr chessMoveSub;
+    void chess_move_callback(const chess_msgs::msg::ChessRobotMove::SharedPtr msg);
+    Mission chessMission(double gameRow, double gameCol, const std::string& color, Task task,
+                         double zGrip, double zTravel, int gripClose);
+    int gripCloseForWidth(double widthM) const;
+    double gripExtraMm = 10.0;
+    double chessPlaceClearance = 0.002;  // place this much above the grip height [m]
+    int chessMarkerCount = 0;            // RViz ids of chess pieces beside the board
     
     rclcpp::Subscription<checkers_msgs::msg::HandDetected>::SharedPtr handDetectedSub;
     void hand_detected_callback(const checkers_msgs::msg::HandDetected::SharedPtr msg);
@@ -149,6 +163,10 @@ private:
     // Robot-frame (X, Y) of a mission square (row/col after
     // rotate90DegreesCounterClockwise) or of a storage slot.
     std::pair<double, double> missionToXY(int row, int col) const;
+    // Robot-frame (X, Y) of a game-frame position (fractional / outside 0..7 = beside the board)
+    std::pair<double, double> gameToXY(double gameRow, double gameCol) const;
+    // A mission's target: its own XY (chess) or missionToXY(row, col)
+    std::pair<double, double> missionXY(const Mission& mission) const;
     void computeBoardGeometry(double h8x, double h8y, double a1x, double a1y);
     float zAttach;          // TCP (fingertip) height when grasping; ROS parameter "z_attach"
     float zMoving;          // Safe height for moving above board
