@@ -16,7 +16,8 @@ board is still and changed exactly as asked, three photos (three exposures)
 are taken automatically and the next instruction appears.  Resetting the
 board (empty / start position) always waits for SPACE.
 
-Keys:  SPACE  take the photos now (also: confirm a reset)
+Keys:  SPACE  take the photos now - only needed for resets, or when the
+              automatic photo does not come (it needs the board to have moved)
        N      skip this instruction (e.g. a piece is missing)
        U      the last photos were wrong: delete them, fix the board, SPACE
        1 2 3  lighting tag: 1 normal, 2 dark, 3 bright (set it whenever you
@@ -172,8 +173,14 @@ class Recorder:
             key = cv2.waitKey(1) & 0xFF
             if key in (27, ord('q'), ord('Q')):
                 break
-            if key == 32 or auto:
-                self.capture(frame, work, ins)
+            if key == 32 and ins.kind in ("game", "scatter") and self.retake is None \
+                    and not self.moved:
+                # nothing moved since the last photo: a second SPACE (or one
+                # pressed during the photos) must not label this board as the
+                # next position
+                self.status = "do the move first (SPACE is only needed if no photo comes)"
+            elif key == 32 or auto:
+                self.capture(frame, work, ins, "space" if key == 32 else "auto")
             elif key in (ord('n'), ord('N')):
                 self.planner.skip()
             elif key in (ord('u'), ord('U')):
@@ -221,7 +228,7 @@ class Recorder:
         self.prev_small = small
 
     # ------------------------------------------------------------ photos
-    def capture(self, frame, work, ins):
+    def capture(self, frame, work, ins, trigger="space"):
         self.draw(work, ins, 0, banner="TAKING PHOTOS - hands off")
         cv2.waitKey(1)
         corners = find_board_corners(work)[0]
@@ -247,7 +254,8 @@ class Recorder:
                 files.append(name)
                 rec = label_record(name, after, self.corners / WORK_SCALE, exp, self.lighting, step,
                                    ins.text, self.full_size, self.a1_corner, kind=ins.kind,
-                                   time=time.time(), gain_db=round(self.cam.gain_db, 2), **extra)
+                                   time=time.time(), gain_db=round(self.cam.gain_db, 2),
+                                   trigger=trigger, **extra)
                 f.write(json.dumps(rec) + "\n")
                 if k == 0:
                     self.ref = work_image(img)
@@ -263,6 +271,9 @@ class Recorder:
         self.match, self.matches, self.moved = False, 0, False
         self.still_since = time.time()
         self.last_check = time.time()
+        for _ in range(20):               # drop keys pressed while the photos were taken
+            if cv2.waitKey(5) & 0xFF == 255:
+                break
         print(f"[{step:05d}] {ins.text}  ({len(after)} pieces, {self.lighting}, {base} us)")
         if self.photos % LIGHT_CHANGE_EVERY == 0:
             print("[lighting] time to change the lights - then press 1 / 2 / 3")
