@@ -118,6 +118,13 @@ class DatasetPlanner:
         """(logical board, human_white) of the game being replayed, or None."""
         return (self._board, self._human_white) if self._board is not None else None
 
+    def force_start(self, human_white=True):
+        """Next instruction: set up the start position (white or black on the
+        human's side) - e.g. when the recorder was restarted during a reset."""
+        self._queue.clear()
+        self._phase = "reset-empty"
+        self._resets = 0 if human_white else 1     # _plan() increments, odd = white
+
     def after_empty_board(self):
         """The empty board is recorded: the next instruction sets up a start
         position (used when resuming a session)."""

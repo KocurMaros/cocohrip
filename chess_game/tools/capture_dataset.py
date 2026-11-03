@@ -105,7 +105,9 @@ class Recorder:
             self.planner.after_empty_board()   # empty board recorded: set up the start next
         self.ref = None                    # work image of the last photo (change reference)
         self.retake = None                 # Instruction to re-photograph after U
-        if args.resume:                    # first make sure the board is where we left off
+        if args.resume and args.start:     # restarted during a reset: ask for it again
+            self.planner.force_start(args.start == "white")
+        elif args.resume:                  # first make sure the board is where we left off
             self.retake = Instruction("Resumed: make the board look exactly like the diagram, "
                                       "then SPACE", dict(placement), dict(placement), kind="reset")
         self.threshold = args.threshold
@@ -394,6 +396,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out", default="~/chess_dataset")
     ap.add_argument("--resume", help="session directory to continue")
+    ap.add_argument("--start", choices=["white", "black"],
+                    help="with --resume: begin with setting up the start position "
+                         "(white / black on your side)")
     ap.add_argument("--lighting", choices=LIGHTINGS,
                     help="tag stored with every photo (keys 1/2/3 change it); default normal, "
                          "or the last one of a resumed session")
