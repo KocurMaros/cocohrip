@@ -23,7 +23,7 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 from chess_game.dataset import placement_from_fen, read_labels  # noqa: E402
-from chess_game.game import CLASSES, ChessGame  # noqa: E402
+from chess_game.game import CLASSES, ChessGame, collapse_to_colour, to_colour_labels  # noqa: E402
 from chess_game.vision.board_model import BoardModel, contact_sheet, load_intrinsics  # noqa: E402
 from chess_game.vision.classifier import (WORK_SCALE, SquareClassifier,  # noqa: E402
                                           square_crops)
@@ -49,6 +49,7 @@ def main():
     stats = defaultdict(lambda: [0, 0])          # key -> [right, total]
     confusion = Counter()
     moves = defaultdict(lambda: [0, 0])
+    moves_c = defaultdict(lambda: [0, 0])          # matched on empty / white / black only
     intr = {}
     for d in sessions:
         for rec in read_labels(os.path.join(d, "labels.jsonl")):
@@ -78,6 +79,12 @@ def main():
                 stats[("square", k)][1] += 64
                 stats[("board", k)][0] += int(ok.all())
                 stats[("board", k)][1] += 1
+                # what the game needs: empty / white / black
+                cok = collapse_to_colour(probs).argmax(1) == to_colour_labels(truth)
+                stats[("colour square", k)][0] += int(cok.sum())
+                stats[("colour square", k)][1] += 64
+                stats[("colour board", k)][0] += int(cok.all())
+                stats[("colour board", k)][1] += 1
             for t, p in zip(truth[~ok], pred[~ok]):
                 confusion[(CLASSES[t] if t else ".", CLASSES[p] if p else ".")] += 1
             if args.show and not ok.all():
@@ -92,9 +99,13 @@ def main():
                 game.start(rec["fen_before"], human_white=rec["human_white"])
                 inf = game.infer_move(probs)                    # either side's move
                 hit = inf.kind == "move" and inf.move.uci() == rec["uci"]
+                inf_c = game.infer_move(collapse_to_colour(probs))
+                hit_c = inf_c.kind == "move" and inf_c.move.uci()[:4] == rec["uci"][:4]
                 for k in ("all", rec["lighting"], exp_tag):
                     moves[k][0] += int(hit)
                     moves[k][1] += 1
+                    moves_c[k][0] += int(hit_c)
+                    moves_c[k][1] += 1
 
     def pct(v):
         return f"{100.0 * v[0] / max(v[1], 1):6.2f}% ({v[1]})"
@@ -102,8 +113,13 @@ def main():
                                          if k[0] == "square"))
     print("board accuracy  :", "  ".join(f"{k[1]} {pct(v)}" for k, v in sorted(stats.items())
                                          if k[0] == "board"))
+    print("colour squares  :", "  ".join(f"{k[1]} {pct(v)}" for k, v in sorted(stats.items())
+                                         if k[0] == "colour square"))
+    print("colour boards   :", "  ".join(f"{k[1]} {pct(v)}" for k, v in sorted(stats.items())
+                                         if k[0] == "colour board"))
     if moves:
         print("moves recognised:", "  ".join(f"{k} {pct(v)}" for k, v in sorted(moves.items())))
+        print("moves (colours) :", "  ".join(f"{k} {pct(v)}" for k, v in sorted(moves_c.items())))
     print("most common confusions (truth > predicted):",
           ", ".join(f"{t}>{p} x{n}" for (t, p), n in confusion.most_common(12)))
 
