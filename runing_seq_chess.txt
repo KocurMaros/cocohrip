@@ -1,5 +1,7 @@
 // CHESS - everything from ~/chess_ws (checkers stays in ~/checkers_ws: never mix them in one terminal)
 // details: chess_game/docs/STARTUP.md
+// EASIEST: desktop icon "Chess robot" (starts and stops all of the below; launcher/README.md)
+//   install once / after updates, in the desktop session: bash ~/chess_ws/src/cocohrip/launcher/install.sh
 
 // update + build: in a NEW terminal (only ROS Jazzy sourced, never another workspace)
 cd ~/chess_ws/src/cocohrip && git pull

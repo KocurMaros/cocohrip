@@ -71,6 +71,15 @@ has been executed by the real robot.
    moves on the cell confirm it. The speed-ups (GPU, background reading,
    0.5 s stillness, accepting a reading whose colours changed) and the status
    spinner were only tested in replay and simulation so far.
+   Stockfish levels 2..4 now use `UCI_Elo` (1350 / 1600 / 2000):
+   `python3 -m pytest chess_game/test/test_engines.py` on the PC plays every
+   level with the real Stockfish (not installed on the dev laptop).
+0b. **Desktop icons** (branch `feat/launcher`, contains all of feat/chess):
+   `bash launcher/install.sh` in the desktop session, then try **Chess robot**
+   with the robot. Check that the robot rows (power, brakes, safety, pendant
+   program) follow the pendant, that the parts start in order and that **Stop
+   everything** stops them. It was tested only with fake ROS nodes so far.
+   Then **Checkers robot** once. See [../launcher/README.md](../launcher/README.md).
 1. **First game on the cell** (see [docs/STARTUP.md](docs/STARTUP.md)): `ros2 launch chess_game chess_game_launch.py` (it
    loads `~/chess_models/latest`). Check move recognition live, with hands and
    lighting changes.

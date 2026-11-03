@@ -30,7 +30,15 @@ but it reads each board in ~0.5 s instead of ~0.05 s.
    `sudo tee /sys/module/usbcore/parameters/usbfs_memory_mb >/dev/null <<<0`,
    then run `/opt/XIMEA/bin/xiSample` once.
 
-## 2. Start the software (3 terminals)
+## 2. Start the software
+
+**Easiest:** double-click **Chess robot** on the desktop. The panel starts
+the three parts below in order, says what the robot still needs (brakes, ▶
+on the pendant, ...), lets you choose the opponent and level, and has
+**Stop everything**. See `launcher/README.md`; to install the icons once,
+run `bash ~/chess_ws/src/cocohrip/launcher/install.sh` in the desktop session.
+
+By hand, in 3 terminals:
 
 ```bash
 # terminal 1 - robot driver, MoveIt, RViz, gripper

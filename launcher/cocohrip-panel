@@ -1,0 +1,20 @@
+#!/bin/bash
+# Opens the robot cell control panel:  cocohrip-panel chess | checkers | --stop-all
+# in a clean ROS environment: ROS + that game's workspace, plus the DDS
+# settings of ~/.bashrc (ROS_DOMAIN_ID, ...) - nothing else from it, so a
+# workspace sourced in ~/.bashrc cannot mix with the game's.
+HERE=$(dirname "$(readlink -f "$0")")
+case "$1" in
+  checkers) WS=$HOME/checkers_ws ;;
+  *)        WS=$HOME/chess_ws ;;
+esac
+DDS='ROS_DOMAIN_ID ROS_LOCALHOST_ONLY ROS_AUTOMATIC_DISCOVERY_RANGE ROS_STATIC_PEERS RMW_IMPLEMENTATION CYCLONEDDS_URI FASTRTPS_DEFAULT_PROFILES_FILE FASTDDS_DEFAULT_PROFILES_FILE'
+SETTINGS=$(DDS=$DDS timeout 5 bash -ic 'for v in $DDS; do [ -n "${!v}" ] && printf "@@ export %s=%q\n" "$v" "${!v}"; done' 2>/dev/null </dev/null | sed -n 's/^@@ //p')
+unset AMENT_PREFIX_PATH CMAKE_PREFIX_PATH COLCON_PREFIX_PATH PYTHONPATH LD_LIBRARY_PATH \
+      ROS_PACKAGE_PATH ROS_DISTRO ROS_VERSION ROS_PYTHON_VERSION $DDS
+eval "$SETTINGS"
+for d in jazzy humble; do
+  [ -f /opt/ros/$d/setup.bash ] && { source /opt/ros/$d/setup.bash; break; }
+done
+[ -f "$WS/install/setup.bash" ] && source "$WS/install/setup.bash"
+exec python3 "$HERE/cocohrip_panel.py" "$@"
